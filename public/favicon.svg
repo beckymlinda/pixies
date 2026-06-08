@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#dc3545;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#bb2d3b;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="32" height="32" rx="8" fill="url(#bg)"/>
+  
+  <!-- Simple glass icon -->
+  <g transform="translate(16, 16)">
+    <path d="M -4 -6 L -3.5 3 Q -3.4 4 -2.5 4.5 L 2.5 4.5 Q 3.4 4 3.5 3 L 4 -6 Z" 
+          fill="rgba(255,255,255,0.9)"/>
+    <ellipse cx="0" cy="-6" rx="4" ry="0.6" fill="rgba(255,255,255,0.8)"/>
+  </g>
+</svg>

@@ -1,0 +1,234 @@
+/* ================================
+   PIXIES DESIGN SYSTEM
+================================ */
+
+/* Colors */
+:root {
+    --pixies-primary: #d32f2f;
+    --pixies-primary-dark: #9a0007;
+    --pixies-secondary: #1976d2;
+    --pixies-success: #2e7d32;
+    --pixies-warning: #f9a825;
+    --pixies-bg: #f5f6fa;
+    --pixies-card: #ffffff;
+    --pixies-text: #2c2c2c;
+    --pixies-muted: #7a7a7a;
+    --pixies-border: #e5e7eb;
+}
+
+/* Base */
+body {
+    background-color: var(--pixies-bg);
+    color: var(--pixies-text);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+/* ================================
+   CARDS
+================================ */
+
+.pixies-card {
+    background: var(--pixies-card);
+    border: 1px solid var(--pixies-border);
+    border-radius: 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    transition: all 0.2s ease;
+}
+
+.pixies-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+}
+
+/* Header Card */
+.page-header {
+    background: linear-gradient(135deg, #ffffff, #fafafa);
+    border-radius: 18px;
+    border: 1px solid var(--pixies-border);
+}
+
+/* ================================
+   BUTTONS
+================================ */
+
+.pixies-btn-primary {
+    background: var(--pixies-primary);
+    border: none;
+    color: #fff;
+    font-weight: 600;
+    border-radius: 12px;
+    padding: 12px 16px;
+    transition: all 0.2s ease;
+}
+
+.pixies-btn-primary:hover {
+    background: var(--pixies-primary-dark);
+    transform: translateY(-1px);
+}
+
+.pixies-btn-secondary {
+    background: #f1f5f9;
+    color: var(--pixies-text);
+    border: none;
+    border-radius: 12px;
+    font-weight: 500;
+    padding: 10px 14px;
+    transition: all 0.2s ease;
+}
+
+.pixies-btn-secondary:hover {
+    background: #e2e8f0;
+}
+
+/* ================================
+   SPECIAL CARDS
+================================ */
+
+.stock-entry-card {
+    border-left: 5px solid var(--pixies-primary);
+}
+
+.reports-card {
+    border-left: 5px solid var(--pixies-secondary);
+}
+
+/* ================================
+   BADGES
+================================ */
+
+.badge {
+    border-radius: 999px;
+    font-weight: 500;
+    font-size: 0.75rem;
+}
+
+/* ================================
+   LIST GROUP
+================================ */
+
+.list-group-item {
+    border: none;
+    border-bottom: 1px solid var(--pixies-border);
+    padding: 16px 0;
+}
+
+.list-group-item:last-child {
+    border-bottom: none;
+}
+
+/* ================================
+   TYPOGRAPHY
+================================ */
+
+h1, h2, h3, h4 {
+    font-weight: 600;
+}
+
+.text-muted {
+    color: var(--pixies-muted) !important;
+}
+
+/* ================================
+   ICON BLOCKS
+================================ */
+
+.icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* ================================
+   GRADIENT HEADER
+================================ */
+
+.card-header.bg-gradient {
+    background: linear-gradient(135deg, var(--pixies-primary), var(--pixies-primary-dark));
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+}
+
+/* ================================
+   MOBILE OPTIMIZATION
+================================ */
+
+@media (max-width: 768px) {
+
+    .container-fluid {
+        padding: 12px !important;
+    }
+
+    .card {
+        border-radius: 14px;
+    }
+
+    .pixies-btn-primary,
+    .pixies-btn-secondary {
+        font-size: 16px;
+        padding: 14px;
+    }
+
+    h1 {
+        font-size: 1.5rem;
+    }
+
+    .display-5 {
+        font-size: 2rem;
+    }
+
+    .display-4 {
+        font-size: 2.2rem;
+    }
+
+    /* Stack content nicely */
+    .d-flex {
+        flex-wrap: wrap;
+    }
+
+    .text-end {
+        text-align: left !important;
+    }
+}
+
+/* ================================
+   EMPTY STATE
+================================ */
+
+.text-center .display-1 {
+    font-size: 4rem;
+    opacity: 0.8;
+}
+
+/* ================================
+   UTILITIES
+================================ */
+
+.shadow-soft {
+    box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+}
+
+.rounded-xl {
+    border-radius: 18px;
+}
+
+/* ================================
+   ANIMATIONS (SUBTLE)
+================================ */
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.card {
+    animation: fadeIn 0.3s ease;
+}

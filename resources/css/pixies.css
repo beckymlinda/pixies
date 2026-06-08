@@ -1,0 +1,156 @@
+/* ======================================
+   PIXIES DESIGN SYSTEM v2.0
+   Theme: Navy & Slate (Modern Executive)
+   ====================================== */
+
+:root {
+    /* Primary Colors */
+    --pixies-primary: #1e293b;
+    --pixies-primary-dark: #0f172a;
+    --pixies-accent: #3b82f6;
+    --pixies-accent-hover: #2563eb;
+    
+    /* Semantic Colors */
+    --pixies-success: #10b981;
+    --pixies-danger: #ef4444;
+    --pixies-warning: #f59e0b;
+    --pixies-info: #0ea5e9;
+    
+    /* Neutral Palette */
+    --pixies-bg: #f8fafc;
+    --pixies-card: #ffffff;
+    --pixies-border: #e2e8f0;
+    --pixies-text: #1e293b;
+    --pixies-text-muted: #64748b;
+    
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+/* Base reset & Typography */
+body {
+    background-color: var(--pixies-bg);
+    color: var(--pixies-text);
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Standardized Card */
+.card-modern {
+    background: var(--pixies-card);
+    border: 1px solid var(--pixies-border);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.card-modern:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+}
+
+/* Premium Buttons */
+.btn-primary {
+    background: var(--pixies-primary);
+    border-color: var(--pixies-primary);
+    border-radius: 10px;
+    padding: 0.6rem 1.25rem;
+    font-weight: 600;
+    transition: all 0.2s;
+}
+
+.btn-primary:hover {
+    background: var(--pixies-primary-dark);
+    border-color: var(--pixies-primary-dark);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+
+.btn-outline-primary {
+    border-color: var(--pixies-border);
+    color: var(--pixies-text);
+    border-radius: 10px;
+}
+
+.btn-outline-primary:hover {
+    background: #f1f5f9;
+    border-color: #cbd5e1;
+    color: var(--pixies-primary);
+}
+
+/* Form Styling */
+.form-control, .form-select {
+    border: 1px solid var(--pixies-border);
+    border-radius: 10px;
+    padding: 0.7rem 1rem;
+    font-size: 0.95rem;
+    transition: all 0.2s;
+}
+
+.form-control:focus, .form-select:focus {
+    border-color: var(--pixies-accent);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+
+/* Badge System */
+.badge {
+    padding: 0.4em 0.8em;
+    font-weight: 600;
+    border-radius: 6px;
+}
+
+/* Table Enhancements */
+.table-modern {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.table-modern thead th {
+    background: #f8fafc;
+    color: var(--pixies-text-muted);
+    font-weight: 700;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1rem;
+    border-bottom: 2px solid var(--pixies-border);
+}
+
+.table-modern td {
+    padding: 1rem;
+    vertical-align: middle;
+}
+
+/* Mobile Utilities */
+@media (max-width: 768px) {
+    .mobile-stack {
+        flex-direction: column;
+        gap: 1rem;
+    }
+}
+
+/* Icons */
+.icon-container {
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+}
+
+.bg-primary-soft { background: rgba(30, 41, 59, 0.1); color: var(--pixies-primary); }
+.bg-success-soft { background: rgba(16, 185, 129, 0.1); color: var(--pixies-success); }
+.bg-danger-soft { background: rgba(239, 68, 68, 0.1); color: var(--pixies-danger); }
+
+/* Animation Classes */
+.animate-in {
+    animation: slideIn 0.4s ease-out forwards;
+}
+
+@keyframes slideIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}

@@ -1,0 +1,308 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\DailyReport;
+use App\Models\DailyReportPayment;
+use App\Models\DailyStockEntry;
+use Illuminate\Http\Request;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\View\View;
+use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
+
+class ReportingController extends Controller
+{
+    /**
+     * Display a listing of daily reports.
+     */
+    public function index(): View
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        $query = DailyReport::with(['user', 'bar', 'payments'])
+            ->orderBy('date', 'desc');
+
+        // Sellers can only see their own reports
+        if ($user->isSeller()) {
+            $query->where('user_id', $user->id);
+        }
+
+        $reports = $query->paginate(15);
+
+        return view('reporting.index', compact('reports'));
+    }
+
+    /**
+     * Show the form for creating a new daily report.
+     */
+    public function create(): View
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        // Sellers must be assigned to a bar
+        if ($user->isSeller() && !$user->bar_id) {
+            abort(403, 'Sellers must be assigned to a bar to create reports');
+        }
+
+        // Check if today's report already exists
+        $existingReport = DailyReport::getTodayReport();
+        
+        // Get today's stock entry to calculate total sales
+        $today = now()->format('Y-m-d');
+        $stockEntry = null;
+        $totalSales = 0;
+
+        if ($user->bar_id) {
+            $stockEntry = DailyStockEntry::where('date', $today)
+                ->where('bar_id', $user->bar_id)
+                ->when($user->isSeller(), function ($query) use ($user) {
+                    return $query->where('user_id', $user->id);
+                })
+                ->first();
+
+            if ($stockEntry) {
+                $totalSales = $stockEntry->stockEntryItems->sum('sales_amount');
+            }
+        }
+
+        $paymentMethods = DailyReportPayment::getPaymentMethods();
+
+        return view('reporting.create', compact(
+            'existingReport',
+            'stockEntry',
+            'totalSales',
+            'paymentMethods'
+        ));
+    }
+
+    /**
+     * Store a newly created daily report in storage.
+     */
+    public function store(Request $request): RedirectResponse
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        $validated = $request->validate([
+            'cash_in_hand' => 'required|numeric|min:0',
+            'payments' => 'required|array|min:1',
+            'payments.*.payment_method' => 'required|in:MO,Airtel Money,Mpamba,Cash',
+            'payments.*.amount' => 'required|numeric|min:0',
+            'payments.*.description' => 'nullable|string|max:255',
+            'notes' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Calculate total payments
+            $totalPayments = collect($validated['payments'])->sum('amount');
+
+            // Create or update daily report
+            $dailyReport = DailyReport::updateOrCreate(
+                [
+                    'user_id' => $user->id,
+                    'bar_id' => $user->bar_id,
+                    'date' => now()->format('Y-m-d'),
+                ],
+                [
+                    'cash_in_hand' => $validated['cash_in_hand'],
+                    'total_sales' => $request->input('total_sales', 0),
+                    'total_payments' => $totalPayments,
+                    'notes' => $validated['notes'] ?? null,
+                ]
+            );
+
+            // Delete existing payments if updating
+            $dailyReport->payments()->delete();
+
+            // Create new payments
+            foreach ($validated['payments'] as $payment) {
+                DailyReportPayment::create([
+                    'daily_report_id' => $dailyReport->id,
+                    'payment_method' => $payment['payment_method'],
+                    'amount' => $payment['amount'],
+                    'description' => $payment['description'] ?? null,
+                ]);
+            }
+
+            DB::commit();
+
+            return redirect()
+                ->route('reporting.index')
+                ->with('success', 'Daily report saved successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            
+            return back()
+                ->withInput()
+                ->with('error', 'Error saving daily report: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Display the specified daily report.
+     */
+    public function show(DailyReport $dailyReport): View
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        // Sellers can only view their own reports
+        if ($user->isSeller() && $dailyReport->user_id !== $user->id) {
+            abort(403, 'Unauthorized access to this report');
+        }
+
+        $dailyReport->load(['user', 'bar', 'payments']);
+        $paymentsByMethod = $dailyReport->getPaymentsByMethod();
+
+        return view('reporting.show', compact('dailyReport', 'paymentsByMethod'));
+    }
+
+    /**
+     * Show the form for editing the specified daily report.
+     */
+    public function edit(DailyReport $dailyReport): View
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        // Sellers can only edit their own reports and only today's report
+        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
+            abort(403, 'You can only edit your own today\'s report');
+        }
+
+        $dailyReport->load('payments');
+        $paymentMethods = DailyReportPayment::getPaymentMethods();
+
+        return view('reporting.edit', compact('dailyReport', 'paymentMethods'));
+    }
+
+    /**
+     * Update the specified daily report in storage.
+     */
+    public function update(Request $request, DailyReport $dailyReport): RedirectResponse
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        // Sellers can only update their own reports and only today's report
+        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
+            abort(403, 'You can only update your own today\'s report');
+        }
+
+        $validated = $request->validate([
+            'cash_in_hand' => 'required|numeric|min:0',
+            'payments' => 'required|array|min:1',
+            'payments.*.payment_method' => 'required|in:MO,Airtel Money,Mpamba,Cash',
+            'payments.*.amount' => 'required|numeric|min:0',
+            'payments.*.description' => 'nullable|string|max:255',
+            'notes' => 'nullable|string|max:1000',
+        ]);
+
+        try {
+            DB::beginTransaction();
+
+            // Calculate total payments
+            $totalPayments = collect($validated['payments'])->sum('amount');
+
+            // Update daily report
+            $dailyReport->update([
+                'cash_in_hand' => $validated['cash_in_hand'],
+                'total_payments' => $totalPayments,
+                'notes' => $validated['notes'] ?? null,
+            ]);
+
+            // Delete existing payments
+            $dailyReport->payments()->delete();
+
+            // Create new payments
+            foreach ($validated['payments'] as $payment) {
+                DailyReportPayment::create([
+                    'daily_report_id' => $dailyReport->id,
+                    'payment_method' => $payment['payment_method'],
+                    'amount' => $payment['amount'],
+                    'description' => $payment['description'] ?? null,
+                ]);
+            }
+
+            DB::commit();
+
+            return redirect()
+                ->route('reporting.show', $dailyReport)
+                ->with('success', 'Daily report updated successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            
+            return back()
+                ->withInput()
+                ->with('error', 'Error updating daily report: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Remove the specified daily report from storage.
+     */
+    public function destroy(DailyReport $dailyReport): RedirectResponse
+    {
+        $user = auth()->user();
+        
+        // Authorization: Only bar seller, manager, director can access
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        // Sellers can only delete their own reports and only today's report
+        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
+            abort(403, 'You can only delete your own today\'s report');
+        }
+
+        try {
+            DB::beginTransaction();
+            
+            $dailyReport->payments()->delete();
+            $dailyReport->delete();
+            
+            DB::commit();
+
+            return redirect()
+                ->route('reporting.index')
+                ->with('success', 'Daily report deleted successfully!');
+
+        } catch (\Exception $e) {
+            DB::rollback();
+            
+            return back()
+                ->with('error', 'Error deleting daily report: ' . $e->getMessage());
+        }
+    }
+}

@@ -1,0 +1,22 @@
+{
+    "name": "Pixies Bar Management",
+    "short_name": "Pixies Bar",
+    "description": "Mobile bar stock and cash management system",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#dc3545",
+    "orientation": "portrait",
+    "icons": [
+        {
+            "src": "/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
+        }
+    ],
+    "categories": ["business", "productivity", "finance"],
+    "lang": "en",
+    "scope": "/",
+    "prefer_related_applications": false
+}
