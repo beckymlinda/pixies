@@ -182,14 +182,8 @@
                     <a href="{{ route('stock-entries.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-entries.*') ? 'active' : '' }}">
                         <i class="bi bi-box-seam"></i> Stock Entries
                     </a>
-                    <a href="{{ route('warehouse.index') }}" class="sidebar-nav-link {{ request()->routeIs('warehouse.*') ? 'active' : '' }}">
-                        <i class="bi bi-warehouse"></i> Stock Warehouse
-                    </a>
                     <a href="{{ route('stock-expiry.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-expiry.*') ? 'active' : '' }}">
                         <i class="bi bi-exclamation-triangle"></i> Stock Expiry
-                    </a>
-                    <a href="{{ route('profit-loss.index') }}" class="sidebar-nav-link {{ request()->routeIs('profit-loss.*') ? 'active' : '' }}">
-                        <i class="bi bi-graph-up"></i> Profit & Loss
                     </a>
                     <a href="{{ route('seller.orders.create') }}" class="sidebar-nav-link {{ request()->routeIs('seller.orders.create') ? 'active' : '' }}">
                         <i class="bi bi-cart-plus"></i> Request Stock
@@ -219,9 +213,20 @@
                     <a href="{{ route('stock.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock.*') ? 'active' : '' }}">
                         <i class="bi bi-box-seam"></i> Stock
                     </a>
-                    <a href="{{ route('director-stock-entries.create') }}" class="sidebar-nav-link {{ request()->routeIs('director-stock-entries.create') ? 'active' : '' }}">
-                        <i class="bi bi-arrow-left-right"></i> Request Stock
-                    </a>
+                    @if(auth()->user()->isDirector())
+                        <a href="{{ route('director-stock-entries.create') }}" class="sidebar-nav-link {{ request()->routeIs('director-stock-entries.create') ? 'active' : '' }}">
+                            <i class="bi bi-arrow-left-right"></i> Request Stock
+                        </a>
+                        <a href="{{ route('director.orders.index') }}" class="sidebar-nav-link {{ request()->routeIs('director.orders.*') ? 'active' : '' }} d-flex justify-content-between align-items-center">
+                            <span><i class="bi bi-check-circle"></i> Stock Requests</span>
+                            @php
+                                $pendingOrdersCount = \App\Models\OrderRequest::where('status', 'pending')->count();
+                            @endphp
+                            @if($pendingOrdersCount > 0)
+                                <span class="badge bg-warning text-dark rounded-pill" style="font-size: 0.65rem;">{{ $pendingOrdersCount }}</span>
+                            @endif
+                        </a>
+                    @endif
                     <a href="{{ route('warehouse.index') }}" class="sidebar-nav-link {{ request()->routeIs('warehouse.*') ? 'active' : '' }}">
                         <i class="bi bi-warehouse"></i> Stock Warehouse
                     </a>
@@ -230,15 +235,6 @@
                     </a>
                     <a href="{{ route('profit-loss.index') }}" class="sidebar-nav-link {{ request()->routeIs('profit-loss.*') ? 'active' : '' }}">
                         <i class="bi bi-graph-up"></i> Profit & Loss
-                    </a>
-                    <a href="{{ route('director.orders.index') }}" class="sidebar-nav-link {{ request()->routeIs('director.orders.*') ? 'active' : '' }} d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-check-circle"></i> Stock Requests</span>
-                        @php
-                            $pendingOrdersCount = \App\Models\OrderRequest::where('status', 'pending')->count();
-                        @endphp
-                        @if($pendingOrdersCount > 0)
-                            <span class="badge bg-warning text-dark rounded-pill" style="font-size: 0.65rem;">{{ $pendingOrdersCount }}</span>
-                        @endif
                     </a>
                     <a href="{{ route('reconciliation.index') }}" class="sidebar-nav-link {{ request()->routeIs('reconciliation.*') ? 'active' : '' }}">
                         <i class="bi bi-shield-check"></i> Cash Audit

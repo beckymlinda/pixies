@@ -324,6 +324,7 @@ class WarehouseStockController extends Controller
             'base_unit' => 'required|string|max:255',
             'conversion_factor' => 'required|integer|min:1',
             'bar_selling_prices' => 'nullable|array',
+            'additional_units' => 'nullable|array',
         ]);
 
         DB::beginTransaction();
@@ -396,6 +397,90 @@ class WarehouseStockController extends Controller
                             ]);
                         }
                     }
+                }
+            }
+
+            // Handle additional units
+            // First, get all existing additional units for this warehouse stock
+            $existingAdditionalUnits = $warehouseStock->units()->where('is_base_unit', false)->get();
+            $existingUnitIds = [];
+
+            // Process submitted additional units
+            if ($request->has('additional_units') && is_array($request->additional_units)) {
+                foreach ($request->additional_units as $unitData) {
+                    if (empty($unitData['unit_name'])) continue;
+
+                    $conv = isset($unitData['conversion_factor']) ? intval($unitData['conversion_factor']) : 1;
+                    $purchasePrice = $calculatedBaseUnitCost * $conv;
+
+                    // Check if this is an existing unit (has unit_id in data)
+                    if (isset($unitData['unit_id']) && $unitData['unit_id']) {
+                        // Update existing unit
+                        $existingUnit = $existingAdditionalUnits->where('id', $unitData['unit_id'])->first();
+                        if ($existingUnit) {
+                            $existingUnit->update([
+                                'unit_name' => $unitData['unit_name'],
+                                'conversion_factor' => $conv,
+                                'purchase_price' => $purchasePrice,
+                            ]);
+                            $existingUnitIds[] = $existingUnit->id;
+
+                            // Update per-bar prices if provided
+                            if (!empty($unitData['bar_selling_prices']) && is_array($unitData['bar_selling_prices'])) {
+                                foreach ($unitData['bar_selling_prices'] as $barId => $price) {
+                                    if ($price > 0) {
+                                        $barPrice = $existingUnit->barPrices()->where('bar_id', $barId)->first();
+                                        if ($barPrice) {
+                                            $barPrice->update(['selling_price' => $price]);
+                                        } else {
+                                            \App\Models\WarehouseUnitBarPrice::create([
+                                                'warehouse_unit_id' => $existingUnit->id,
+                                                'bar_id' => $barId,
+                                                'selling_price' => $price,
+                                            ]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Create new additional unit
+                        $newUnit = \App\Models\WarehouseUnit::create([
+                            'warehouse_stock_id' => $warehouseStock->id,
+                            'unit_name' => $unitData['unit_name'],
+                            'conversion_factor' => $conv,
+                            'is_base_unit' => false,
+                            'purchase_price' => $purchasePrice,
+                        ]);
+                        $existingUnitIds[] = $newUnit->id;
+
+                        // Create per-bar prices if provided
+                        if (!empty($unitData['bar_selling_prices']) && is_array($unitData['bar_selling_prices'])) {
+                            foreach ($unitData['bar_selling_prices'] as $barId => $price) {
+                                if ($price > 0) {
+                                    try {
+                                        \App\Models\WarehouseUnitBarPrice::create([
+                                            'warehouse_unit_id' => $newUnit->id,
+                                            'bar_id' => $barId,
+                                            'selling_price' => $price,
+                                        ]);
+                                    } catch (\Exception $e) {
+                                        \Log::warning('Failed to create warehouse unit bar price', ['error' => $e->getMessage()]);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Delete additional units that were not submitted (removed by user)
+            foreach ($existingAdditionalUnits as $existingUnit) {
+                if (!in_array($existingUnit->id, $existingUnitIds)) {
+                    // Delete bar prices first
+                    $existingUnit->barPrices()->delete();
+                    // Then delete the unit
+                    $existingUnit->delete();
                 }
             }
 
