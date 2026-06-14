@@ -111,4 +111,13 @@ class WarehouseTransferRequest extends Model
     {
         return $this->status === 'rejected';
     }
+
+    public function resolveBarName(): string
+    {
+        if ($this->relationLoaded('bar') && $this->bar) {
+            return $this->bar->name;
+        }
+
+        return Bar::find($this->bar_id)?->name ?? 'Unknown Bar';
+    }
 }

@@ -9,14 +9,90 @@ use App\Models\DailyReportPayment;
 use App\Models\DailyStockEntry;
 use App\Models\Expense;
 use App\Models\Payment;
+use App\Models\ProductUnit;
+use App\Models\ProductUnitPrice;
 use App\Models\StockEntryItem;
 use Carbon\Carbon;
-use Illuminate\Database\Query\Builder;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 class ProfitLossController extends Controller
 {
+    /**
+     * Resolve cost per base unit for COGS.
+     * sold_quantity is always stored in base units; costs must match warehouse formula:
+     * total_purchase_cost / (quantity_purchased * conversion_factor).
+     */
+    private function resolveBaseUnitCost(StockEntryItem $item): float
+    {
+        $item->loadMissing('item');
+
+        $baseUnit = ProductUnit::where('item_id', $item->item_id)
+            ->where('is_base_unit', true)
+            ->first();
+
+        if ($baseUnit) {
+            $unitPrice = ProductUnitPrice::where('item_id', $item->item_id)
+                ->where('unit_name', $baseUnit->unit_name)
+                ->first();
+            if ($unitPrice && $unitPrice->purchase_price > 0) {
+                return (float) $unitPrice->purchase_price;
+            }
+        }
+
+        if ($item->item && ($item->item->average_unit_cost ?? 0) > 0) {
+            return (float) $item->item->average_unit_cost;
+        }
+
+        $cost = (float) ($item->purchase_price ?? 0);
+        if ($cost > 0 && $item->unit_name) {
+            $unit = ProductUnit::where('item_id', $item->item_id)
+                ->where('unit_name', $item->unit_name)
+                ->first();
+            if ($unit && ! $unit->is_base_unit && $unit->conversion_factor > 0) {
+                return $cost / $unit->conversion_factor;
+            }
+        }
+
+        return $cost;
+    }
+
+    private function calculatePurchaseCost(Collection $stockItems): float
+    {
+        $purchaseCost = 0;
+        foreach ($stockItems as $item) {
+            $purchaseCost += $this->resolveBaseUnitCost($item) * $item->sold_quantity;
+        }
+
+        return $purchaseCost;
+    }
+
+    private function stockItemsQuery(Carbon $date, $bar = null, ?Bar $selectedBar = null): Builder
+    {
+        return StockEntryItem::whereHas('stockEntry', function ($q) use ($date, $bar, $selectedBar) {
+            $q->whereDate('date', $date);
+            if ($bar) {
+                $q->where('bar_id', $bar->id);
+            } elseif ($selectedBar) {
+                $q->where('bar_id', $selectedBar->id);
+            }
+        })->with('item');
+    }
+
+    private function stockItemsRangeQuery(Carbon $startDate, Carbon $endDate, Bar $bar): Builder
+    {
+        return StockEntryItem::whereHas('stockEntry', function ($q) use ($startDate, $endDate, $bar) {
+            $q->whereBetween('date', [$startDate, $endDate])->where('bar_id', $bar->id);
+        })->with('item');
+    }
+
+    private function marginPercent(float $profit, float $sales): float
+    {
+        return $sales > 0 ? round(($profit / $sales) * 100, 2) : 0;
+    }
+
     /**
      * Display profit and loss report
      */
@@ -30,7 +106,7 @@ class ProfitLossController extends Controller
         $barAnalysis = [];
 
         if (! $user->isSeller()) {
-            $bars = Bar::orderBy('name')->get();
+            $bars = Bar::listed()->orderBy('name')->get();
             if ($barId !== 'all') {
                 $selectedBar = Bar::find($barId);
                 if (! $selectedBar) {
@@ -72,29 +148,8 @@ class ProfitLossController extends Controller
             if ($user->hasRole('seller')) {
                 $bar = $user->bar;
 
-                $salesAmount = StockEntryItem::whereHas('stockEntry', function($q) use ($currentDate, $bar) {
-                    $q->whereDate('date', $currentDate)->where('bar_id', $bar->id);
-                })->sum('sales_amount');
-
-                // Calculate purchase cost using unit-specific prices when available
-                $stockItems = StockEntryItem::whereHas('stockEntry', function($q) use ($currentDate, $bar) {
-                    $q->whereDate('date', $currentDate)->where('bar_id', $bar->id);
-                })->get();
-
-                $purchaseCost = 0;
-                foreach ($stockItems as $item) {
-                    $unitPurchasePrice = $item->purchase_price;
-                    // If unit_name is set, try to get unit-specific purchase price
-                    if ($item->unit_name) {
-                        $unitPrice = \App\Models\ProductUnitPrice::where('item_id', $item->item_id)
-                            ->where('unit_name', $item->unit_name)
-                            ->first();
-                        if ($unitPrice && $unitPrice->purchase_price > 0) {
-                            $unitPurchasePrice = $unitPrice->purchase_price;
-                        }
-                    }
-                    $purchaseCost += $unitPurchasePrice * $item->sold_quantity;
-                }
+                $salesAmount = $this->stockItemsQuery($currentDate, $bar)->sum('sales_amount');
+                $purchaseCost = $this->calculatePurchaseCost($this->stockItemsQuery($currentDate, $bar)->get());
 
                 $expenses = Expense::where('user_id', $user->id)
                     ->whereDate('date', $currentDate)
@@ -102,35 +157,8 @@ class ProfitLossController extends Controller
 
                 $locationName = $bar->name;
             } else {
-                $salesAmount = StockEntryItem::whereHas('stockEntry', function($q) use ($currentDate, $selectedBar) {
-                    $q->whereDate('date', $currentDate);
-                    if ($selectedBar) {
-                        $q->where('bar_id', $selectedBar->id);
-                    }
-                })->sum('sales_amount');
-
-                // Calculate purchase cost using unit-specific prices when available
-                $stockItems = StockEntryItem::whereHas('stockEntry', function($q) use ($currentDate, $selectedBar) {
-                    $q->whereDate('date', $currentDate);
-                    if ($selectedBar) {
-                        $q->where('bar_id', $selectedBar->id);
-                    }
-                })->get();
-
-                $purchaseCost = 0;
-                foreach ($stockItems as $item) {
-                    $unitPurchasePrice = $item->purchase_price;
-                    // If unit_name is set, try to get unit-specific purchase price
-                    if ($item->unit_name) {
-                        $unitPrice = \App\Models\ProductUnitPrice::where('item_id', $item->item_id)
-                            ->where('unit_name', $item->unit_name)
-                            ->first();
-                        if ($unitPrice && $unitPrice->purchase_price > 0) {
-                            $unitPurchasePrice = $unitPrice->purchase_price;
-                        }
-                    }
-                    $purchaseCost += $unitPurchasePrice * $item->sold_quantity;
-                }
+                $salesAmount = $this->stockItemsQuery($currentDate, null, $selectedBar)->sum('sales_amount');
+                $purchaseCost = $this->calculatePurchaseCost($this->stockItemsQuery($currentDate, null, $selectedBar)->get());
 
                 $expensesQuery = Expense::whereDate('date', $currentDate);
                 if ($selectedBar) {
@@ -153,9 +181,10 @@ class ProfitLossController extends Controller
                 'sales' => $salesAmount,
                 'purchase_cost' => $purchaseCost,
                 'gross_profit' => $grossProfit,
+                'gross_margin' => $this->marginPercent($grossProfit, $salesAmount),
                 'expenses' => $expenses,
                 'net_profit' => $netProfit,
-                'profit_margin' => $salesAmount > 0 ? round(($netProfit / $salesAmount) * 100, 2) : 0,
+                'profit_margin' => $this->marginPercent($netProfit, $salesAmount),
             ];
 
             $currentDate->addDay();
@@ -223,29 +252,28 @@ class ProfitLossController extends Controller
         // Bar-by-bar analysis
         $barAnalysis = [];
         if (!$selectedBar && !$user->hasRole('seller')) {
-            $bars = Bar::all();
+            $bars = Bar::listed()->get();
             foreach ($bars as $bar) {
-                $barSales = StockEntryItem::whereHas('stockEntry', function($q) use ($startDate, $endDate, $bar) {
-                    $q->whereBetween('date', [$startDate, $endDate])->where('bar_id', $bar->id);
-                })->sum('sales_amount');
-                
+                $barSales = $this->stockItemsRangeQuery($startDate, $endDate, $bar)->sum('sales_amount');
+                $barPurchaseCost = $this->calculatePurchaseCost($this->stockItemsRangeQuery($startDate, $endDate, $bar)->get());
+
                 $barExpenses = Expense::where(function($query) use ($bar) {
                     $query->whereHas('stockEntry', fn($q) => $q->where('bar_id', $bar->id))
                         ->orWhereHas('user', fn($q) => $q->where('bar_id', $bar->id));
                 })->whereBetween('date', [$startDate, $endDate])->sum('amount');
                 
-                $barPurchaseCost = StockEntryItem::whereHas('stockEntry', function($q) use ($startDate, $endDate, $bar) {
-                    $q->whereBetween('date', [$startDate, $endDate])->where('bar_id', $bar->id);
-                })->sum(\DB::raw('purchase_price * sold_quantity'));
-                
                 if ($barSales > 0) {
+                    $barGrossProfit = $barSales - $barPurchaseCost;
+                    $barNetProfit = $barGrossProfit - $barExpenses;
                     $barAnalysis[] = [
                         'bar_name' => $bar->name,
                         'sales' => $barSales,
-                        'expenses' => $barExpenses,
                         'purchase_cost' => $barPurchaseCost,
-                        'profit' => $barSales - $barPurchaseCost - $barExpenses,
-                        'margin' => round((($barSales - $barPurchaseCost - $barExpenses) / $barSales) * 100, 2),
+                        'gross_profit' => $barGrossProfit,
+                        'expenses' => $barExpenses,
+                        'profit' => $barNetProfit,
+                        'gross_margin' => $this->marginPercent($barGrossProfit, $barSales),
+                        'margin' => $this->marginPercent($barNetProfit, $barSales),
                     ];
                 }
             }
@@ -295,7 +323,8 @@ class ProfitLossController extends Controller
             ->take(5)
             ->get();
 
-        $totals['profit_margin'] = $totals['sales'] > 0 ? round(($totals['net_profit'] / $totals['sales']) * 100, 2) : 0;
+        $totals['gross_margin'] = $this->marginPercent($totals['gross_profit'], $totals['sales']);
+        $totals['profit_margin'] = $this->marginPercent($totals['net_profit'], $totals['sales']);
 
         // Calculate shortage (missing money)
         $expectedCash = $totals['sales'] - $creditSalesOutstanding;
@@ -333,13 +362,8 @@ class ProfitLossController extends Controller
         if ($user->hasRole('seller')) {
             $bar = $user->bar;
             
-            $salesAmount = StockEntryItem::whereHas('stockEntry', function($q) use ($date, $bar) {
-                $q->whereDate('date', $date)->where('bar_id', $bar->id);
-            })->sum('sales_amount');
-
-            $purchaseCost = StockEntryItem::whereHas('stockEntry', function($q) use ($date, $bar) {
-                $q->whereDate('date', $date)->where('bar_id', $bar->id);
-            })->sum(\DB::raw('purchase_price * sold_quantity'));
+            $salesAmount = $this->stockItemsQuery($date, $bar)->sum('sales_amount');
+            $purchaseCost = $this->calculatePurchaseCost($this->stockItemsQuery($date, $bar)->get());
 
             $expenses = Expense::where('user_id', $user->id)
                 ->whereDate('date', $date)
@@ -349,9 +373,11 @@ class ProfitLossController extends Controller
                 $q->whereDate('date', $date);
             })->sum('sales_amount');
 
-            $purchaseCost = StockEntryItem::whereHas('stockEntry', function($q) use ($date) {
-                $q->whereDate('date', $date);
-            })->sum(\DB::raw('purchase_price * sold_quantity'));
+            $purchaseCost = $this->calculatePurchaseCost(
+                StockEntryItem::whereHas('stockEntry', function($q) use ($date) {
+                    $q->whereDate('date', $date);
+                })->with('item')->get()
+            );
 
             $expenses = Expense::whereDate('date', $date)->sum('amount');
         }
@@ -363,9 +389,10 @@ class ProfitLossController extends Controller
             'sales' => $salesAmount,
             'purchase_cost' => $purchaseCost,
             'gross_profit' => $grossProfit,
+            'gross_margin' => $this->marginPercent($grossProfit, $salesAmount),
             'expenses' => $expenses,
             'net_profit' => $netProfit,
-            'profit_margin' => $salesAmount > 0 ? round(($netProfit / $salesAmount) * 100, 2) : 0,
+            'profit_margin' => $this->marginPercent($netProfit, $salesAmount),
         ];
     }
 }

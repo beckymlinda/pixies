@@ -14,21 +14,21 @@ class UserSeeder extends Seeder
      */
     public function run(): void
     {
-        $bars = Bar::all();
+        $bars = Bar::listed()->orderBy('name')->get();
 
-        // Seller for Pixies Njerwa
-        User::firstOrCreate(
-            ['email' => 'seller@pixies.com'],
-            [
-                'name' => 'John Seller',
-                'password' => bcrypt('password'),
-                'role' => 'seller',
-                'bar_id' => $bars[0]->id,
-            ]
-        );
+        if ($bars->get(0)) {
+            User::firstOrCreate(
+                ['email' => 'seller@pixies.com'],
+                [
+                    'name' => 'John Seller',
+                    'password' => bcrypt('password'),
+                    'role' => 'seller',
+                    'bar_id' => $bars[0]->id,
+                ]
+            );
+        }
 
-        // Seller for Pixies Bar B
-        if (isset($bars[1])) {
+        if ($bars->get(1)) {
             User::firstOrCreate(
                 ['email' => 'seller2@pixies.com'],
                 [
@@ -36,19 +36,6 @@ class UserSeeder extends Seeder
                     'password' => bcrypt('password'),
                     'role' => 'seller',
                     'bar_id' => $bars[1]->id,
-                ]
-            );
-        }
-
-        // Seller for Pixies Liquor Shop
-        if (isset($bars[2])) {
-            User::firstOrCreate(
-                ['email' => 'seller3@pixies.com'],
-                [
-                    'name' => 'Mike Seller',
-                    'password' => bcrypt('password'),
-                    'role' => 'seller',
-                    'bar_id' => $bars[2]->id,
                 ]
             );
         }

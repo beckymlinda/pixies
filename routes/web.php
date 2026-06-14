@@ -19,6 +19,10 @@ Route::get('/', function () {
     return view('welcome');
 });
 
+Route::middleware('auth')->get('/account/pending', function () {
+    return view('auth.pending');
+})->name('account.pending');
+
 Route::get('/dashboard', function () {
     // This route will redirect based on user role via middleware
     return redirect()->route('seller.dashboard');

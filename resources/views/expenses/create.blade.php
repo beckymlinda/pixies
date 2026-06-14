@@ -129,10 +129,9 @@
                                         <i class="bi bi-tag-fill"></i>
                                         <select name="type" class="custom-select" required>
                                             <option value="">Select Category</option>
-                                            <option value="taxi" {{ old('type') == 'taxi' ? 'selected' : '' }}>Taxi</option>
-                                            <option value="damaged" {{ old('type') == 'damaged' ? 'selected' : '' }}>Damaged</option>
-                                            <option value="Lunch" {{ old('type') == 'Lunch' ? 'selected' : '' }}>Staff Lunch</option>
-                                            <option value="Other" {{ old('type') == 'Other' ? 'selected' : '' }}>Miscellaneous</option>
+                                            @foreach(\App\Models\Expense::operationalTypes() as $value => $label)
+                                                <option value="{{ $value }}" {{ old('type') == $value ? 'selected' : '' }}>{{ $label }}</option>
+                                            @endforeach
                                         </select>
                                     </div>
                                 </div>

@@ -78,12 +78,12 @@
     <!-- Modern Header -->
     <div class="edit-header d-flex align-items-center justify-content-between shadow-sm">
         <div class="d-flex align-items-center gap-3">
-            <a href="{{ route('stock-entries.show', $stockEntry) }}" class="btn btn-sm btn-light rounded-circle border shadow-sm bg-white">
+            <a href="{{ route('stock-entries.index') }}" class="btn btn-sm btn-light rounded-circle border shadow-sm bg-white">
                 <i class="bi bi-arrow-left"></i>
             </a>
             <div>
-                <h1 class="h4 fw-bold mb-0 text-dark">Edit Stock Entry</h1>
-                <p class="text-muted small mb-0">Adjusting records for <strong>{{ $stockEntry->date->format('M d, Y') }}</strong></p>
+                <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Continue Selling' : 'Edit Stock Entry' }}</h1>
+                <p class="text-muted small mb-0">{{ auth()->user()->isSeller() ? 'Recording sales for' : 'Adjusting records for' }} <strong>{{ $stockEntry->date->format('M d, Y') }}</strong></p>
             </div>
         </div>
         <div class="d-flex gap-2">
@@ -204,9 +204,9 @@
                     </div>
                 </div>
                 <div class="d-flex gap-2">
-                    <a href="{{ route('stock-entries.show', $stockEntry) }}" class="btn btn-outline-light rounded-pill px-4 border-opacity-25">Cancel</a>
+                    <a href="{{ route('stock-entries.index') }}" class="btn btn-outline-light rounded-pill px-4 border-opacity-25">Cancel</a>
                     <button type="submit" class="btn btn-primary rounded-pill px-5 fw-bold shadow">
-                        <i class="bi bi-check-circle-fill me-2"></i>Update Shift Records
+                        <i class="bi bi-check-circle-fill me-2"></i>{{ auth()->user()->isSeller() ? 'Save Sales' : 'Update Shift Records' }}
                     </button>
                 </div>
             </div>

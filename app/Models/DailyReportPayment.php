@@ -34,8 +34,14 @@ class DailyReportPayment extends Model
         return [
             'Airtel Money' => 'Airtel Money',
             'Mpamba' => 'Mpamba',
+            'MO626' => 'MO626',
             'POS' => 'POS',
             'Cash' => 'Cash',
         ];
+    }
+
+    public static function paymentMethodKeys(): string
+    {
+        return implode(',', array_keys(self::getPaymentMethods()));
     }
 }

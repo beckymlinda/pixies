@@ -17,62 +17,54 @@ class WarehouseStockController extends Controller
     public function index(Request $request): View
     {
         $search = $request->input('search');
-        $selectedBarId = $request->input('bar_id', null);
-        
+        $selectedBarId = $request->input('bar_id') ?: null;
+
         $query = WarehouseStock::with('units.barPrices');
-        
+
         if ($search) {
             $query->where('item_name', 'like', "%{$search}%");
         }
-        
+
         $stocks = $query->orderBy('item_name')->paginate(15);
-        
-        // Get all bars for branch selector
-        $bars = \App\Models\Bar::orderBy('name')->get();
-        
-        // Calculate totals based on selected branch
+
+        $bars = \App\Models\Bar::listed()->orderBy('name')->get();
+        $selectedBar = $selectedBarId ? $bars->firstWhere('id', (int) $selectedBarId) : null;
+
         $totalStockCost = WarehouseStock::sum(\DB::raw('quantity * purchase_price'));
-        
+
         if ($selectedBarId) {
             $totalStockValue = 0;
             $totalExpectedProfit = 0;
-            
+
             foreach ($stocks as $stock) {
-                $stockValue = $stock->getStockValueForBranch($selectedBarId);
-                $totalStockValue += $stockValue;
+                $totalStockValue += $stock->getStockValueForBranch($selectedBarId);
                 $totalExpectedProfit += $stock->getPotentialProfitForBar($selectedBarId);
             }
         } else {
-            // Calculate totals across all branches when "All" is selected
             $totalStockValue = 0;
             $totalExpectedProfit = 0;
-            
+
             foreach ($stocks as $stock) {
                 foreach ($bars as $bar) {
-                    $stockValue = $stock->getStockValueForBranch($bar->id);
-                    $totalStockValue += $stockValue;
+                    $totalStockValue += $stock->getStockValueForBranch($bar->id);
                     $totalExpectedProfit += $stock->getPotentialProfitForBar($bar->id);
                 }
             }
         }
-        
-        // Count low stock items
+
         $lowStockCount = WarehouseStock::whereColumn('quantity', '<=', 'alert_quantity')->count();
-        
-        // Count expiring items
+
         $expiryAlertsCount = WarehouseStock::whereNotNull('expiry_date')
             ->where('expiry_date', '>=', now())
             ->where('expiry_date', '<=', now()->addDays(7))
             ->count();
-        
-        // Count expired items
+
         $expiredCount = WarehouseStock::whereNotNull('expiry_date')
             ->where('expiry_date', '<', now())
             ->count();
-        
-        // Total items in stock
+
         $totalItemsCount = WarehouseStock::count();
-        
+
         return view('warehouse.index', compact(
             'stocks',
             'totalStockCost',
@@ -84,7 +76,8 @@ class WarehouseStockController extends Controller
             'totalItemsCount',
             'search',
             'bars',
-            'selectedBarId'
+            'selectedBarId',
+            'selectedBar'
         ));
     }
 
@@ -93,7 +86,9 @@ class WarehouseStockController extends Controller
      */
     public function create(): View
     {
-        return view('warehouse.create');
+        $bars = \App\Models\Bar::listed()->orderBy('name')->get();
+
+        return view('warehouse.create', compact('bars'));
     }
 
     /**
@@ -105,7 +100,7 @@ class WarehouseStockController extends Controller
             $query->orderBy('transaction_date', 'desc');
         }]);
         
-        $bars = \App\Models\Bar::orderBy('name')->get();
+        $bars = \App\Models\Bar::listed()->orderBy('name')->get();
         
         return view('warehouse.show', compact('warehouseStock', 'bars'));
     }
@@ -182,7 +177,7 @@ class WarehouseStockController extends Controller
             'purchase_unit' => 'required|string|max:255',
             'quantity_purchased' => 'required|integer|min:1',
             'total_purchase_cost' => 'required|numeric|min:0',
-            'base_unit' => 'required|string|max:255',
+            'base_unit' => 'required|string|in:Bottle,Shot',
             'conversion_factor' => 'required|integer|min:1',
             'bar_selling_prices' => 'nullable|array',
             'additional_units' => 'nullable|array',
@@ -301,7 +296,7 @@ class WarehouseStockController extends Controller
      */
     public function edit(WarehouseStock $warehouseStock): View
     {
-        $bars = \App\Models\Bar::orderBy('name')->get();
+        $bars = \App\Models\Bar::listed()->orderBy('name')->get();
         return view('warehouse.edit', compact('warehouseStock', 'bars'));
     }
 
@@ -321,7 +316,7 @@ class WarehouseStockController extends Controller
             'purchase_unit' => 'required|string|max:255',
             'quantity_purchased' => 'required|integer|min:1',
             'total_purchase_cost' => 'required|numeric|min:0',
-            'base_unit' => 'required|string|max:255',
+            'base_unit' => 'required|string|in:Bottle,Shot',
             'conversion_factor' => 'required|integer|min:1',
             'bar_selling_prices' => 'nullable|array',
             'additional_units' => 'nullable|array',
@@ -542,13 +537,13 @@ class WarehouseStockController extends Controller
      */
     public function transferRequests(): View
     {
-        $pendingRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'items.warehouseStock'])
+        $pendingRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'items.warehouseStock', 'items.item'])
             ->where('status', 'pending')
             ->orderBy('requested_at', 'desc')
             ->get();
 
-        $completedRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'approvedBy', 'items.warehouseStock'])
-            ->whereIn('status', ['approved', 'rejected'])
+        $completedRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'approvedBy', 'items.warehouseStock', 'items.item'])
+            ->whereIn('status', ['approved', 'partially_approved', 'rejected'])
             ->orderBy('approved_at', 'desc')
             ->take(50)
             ->get();

@@ -80,19 +80,18 @@
                             @if($barEntry)
                                 @php
                                     $totalSales = $barEntry->stockEntryItems->sum('sales_amount');
-                                    $electronicTotal = \App\Models\DailyReportPayment::whereHas('dailyReport', function($query) use ($barEntry) {
-                                        $query->where('bar_id', $barEntry->bar_id)->whereDate('date', $barEntry->date);
-                                    })->sum('amount');
-                                    
-                                    $dailyReport = \App\Models\DailyReport::where('bar_id', $barEntry->bar_id)->where('date', $barEntry->date)->first();
-                                    $collectedCash = $dailyReport?->cash_in_hand ?? 0;
-                                    
-                                    $expensesTotal = \App\Models\Expense::where('date', $barEntry->date)
-                                                        ->whereHas('stockEntry', fn($q) => $q->where('bar_id', $barEntry->bar_id))
-                                                        ->sum('amount') ?: \App\Models\Expense::where('date', $barEntry->date)->where('user_id', $barEntry->user_id)->sum('amount');
-                                    
-                                    $totalCollected = $collectedCash + $electronicTotal;
-                                    $bankableBalance = $totalCollected - $expensesTotal;
+                                    $paymentBreakdown = $paymentBreakdowns[$bar->id] ?? [];
+                                    $expenditureBreakdown = $expenditureBreakdowns[$bar->id] ?? [];
+                                    $creditSales = $creditSalesByBar[$bar->id] ?? 0;
+
+                                    $operationalExpenses = collect($expenditureBreakdown)
+                                        ->except('Debt (Credit Sale)')
+                                        ->sum();
+
+                                    $totalCollected = collect($paymentBreakdown)->sum();
+                                    $expectedCollected = $totalSales - $creditSales - $operationalExpenses;
+                                    $collectionVariance = $totalCollected - $expectedCollected;
+                                    $bankableBalance = $totalCollected - $operationalExpenses;
                                 @endphp
 
                                 <div class="mb-4">
@@ -101,16 +100,52 @@
                                         <span class="fw-bold text-dark">{{ number_format($totalSales) }}</span>
                                     </div>
                                     <div class="metric-row">
-                                        <span class="small text-muted">Electronic Pay</span>
-                                        <span class="fw-bold text-primary">{{ number_format($electronicTotal) }}</span>
+                                        <span class="small text-muted">Credit Sales</span>
+                                        <span class="fw-bold text-purple">{{ number_format($creditSales) }}</span>
                                     </div>
                                     <div class="metric-row">
-                                        <span class="small text-muted">Cash in Hand</span>
-                                        <span class="fw-bold text-dark">{{ number_format($collectedCash) }}</span>
+                                        <span class="small text-muted">Expected Collected</span>
+                                        <span class="fw-bold text-dark">{{ number_format($expectedCollected) }}</span>
+                                    </div>
+                                    @if(!empty($paymentBreakdown))
+                                        <div class="mt-2 mb-2">
+                                            <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size:0.65rem">Payment Methods</div>
+                                            @foreach($paymentBreakdown as $method => $amount)
+                                                @if($amount > 0)
+                                                <div class="metric-row">
+                                                    <span class="small text-muted">{{ $method }}</span>
+                                                    <span class="fw-bold {{ $method === 'Cash' ? 'text-dark' : 'text-primary' }}">{{ number_format($amount) }}</span>
+                                                </div>
+                                                @endif
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                    <div class="metric-row">
+                                        <span class="small text-muted">Total Collected</span>
+                                        <span class="fw-bold text-primary">{{ number_format($totalCollected) }}</span>
                                     </div>
                                     <div class="metric-row">
-                                        <span class="small text-muted">Expenses Paid</span>
-                                        <span class="fw-bold text-danger">{{ number_format($expensesTotal) }}</span>
+                                        <span class="small text-muted">Collection Variance</span>
+                                        <span class="fw-bold {{ $collectionVariance < 0 ? 'text-danger' : ($collectionVariance > 0 ? 'text-info' : 'text-success') }}">
+                                            {{ $collectionVariance < 0 ? '-' : ($collectionVariance > 0 ? '+' : '') }}{{ number_format(abs($collectionVariance)) }}
+                                        </span>
+                                    </div>
+                                    @if(!empty($expenditureBreakdown))
+                                        <div class="mt-2 mb-2">
+                                            <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size:0.65rem">Expenditure</div>
+                                            @foreach($expenditureBreakdown as $type => $amount)
+                                                @if($amount > 0)
+                                                <div class="metric-row">
+                                                    <span class="small text-muted">{{ $type }}</span>
+                                                    <span class="fw-bold {{ $type === 'Debt (Credit Sale)' ? 'text-purple' : 'text-danger' }}">{{ number_format($amount) }}</span>
+                                                </div>
+                                                @endif
+                                            @endforeach
+                                        </div>
+                                    @endif
+                                    <div class="metric-row">
+                                        <span class="small text-muted">Operational Expenses</span>
+                                        <span class="fw-bold text-danger">{{ number_format($operationalExpenses) }}</span>
                                     </div>
                                     <div class="metric-row border-top-0 pt-3">
                                         <span class="fw-bold text-dark">Bankable Total</span>

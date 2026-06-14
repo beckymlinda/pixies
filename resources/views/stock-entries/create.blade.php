@@ -181,7 +181,7 @@
     <!-- Compact Header -->
     <div class="entry-header d-flex align-items-center justify-content-between shadow-sm">
         <div class="d-flex align-items-center gap-3 flex-wrap">
-            <h1 class="h4 fw-bold mb-0 text-dark">New Stock Entry</h1>
+            <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Start Selling' : 'New Stock Entry' }}</h1>
             <div class="vr mx-2 d-none d-md-block"></div>
             @if(auth()->user()->bar)
                 <span class="badge bg-dark text-white badge-pill-custom">📍 {{ auth()->user()->bar->name }}</span>
@@ -250,7 +250,7 @@
                                         <div class="small text-muted">{{ $item['category'] }}</div>
                                         <input type="hidden" name="items[{{ $index }}][item_id]" value="{{ $item['id'] }}">
                                         <input type="hidden" name="items[{{ $index }}][price]" value="{{ $item['price'] }}">
-                                        <input type="hidden" name="items[{{ $index }}][purchase_price]" value="0">
+                                        <input type="hidden" name="items[{{ $index }}][purchase_price]" value="{{ $item['purchase_price'] ?? 0 }}">
                                         <input type="hidden" name="items[{{ $index }}][expiry_date]" value="">
                                     </td>
                                     <td data-label="Unit">
@@ -335,9 +335,9 @@
                     </div>
                 </div>
                 <div class="d-flex gap-2 w-sm-100 mt-2 mt-md-0">
-                    <a href="{{ route('seller.dashboard') }}" class="btn btn-outline-secondary rounded-pill px-4 bg-white">Cancel</a>
+                    <a href="{{ route('stock-entries.index') }}" class="btn btn-outline-secondary rounded-pill px-4 bg-white">Cancel</a>
                     <button type="submit" class="btn btn-primary rounded-pill px-5 fw-bold shadow-sm">
-                        <i class="bi bi-check-lg me-2"></i>Complete Entry
+                        <i class="bi bi-check-lg me-2"></i>{{ auth()->user()->isSeller() ? 'Save Sales' : 'Complete Entry' }}
                     </button>
                 </div>
             </div>

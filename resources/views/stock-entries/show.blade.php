@@ -86,14 +86,14 @@
                 <i class="bi bi-arrow-left"></i>
             </a>
             <div>
-                <h1 class="h4 fw-bold mb-0 text-dark">Stock Entry Report</h1>
+                <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Today\'s Sales' : 'Stock Entry Report' }}</h1>
                 <p class="text-muted small mb-0">Recorded for {{ $stockEntry->date->format('l, F d, Y') }}</p>
             </div>
         </div>
         <div class="d-flex gap-2 flex-wrap">
             @if(auth()->user()->isSeller() && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d'))
                 <a href="{{ route('stock-entries.edit', $stockEntry) }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                    <i class="bi bi-pencil me-2"></i>Edit Entry
+                    <i class="bi bi-play-fill me-2"></i>Continue Selling
                 </a>
             @endif
             @if(auth()->user()->bar)

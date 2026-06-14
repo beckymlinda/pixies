@@ -3,7 +3,6 @@
 @section('content')
 @php 
     $pageTitle = 'Edit Warehouse Item'; 
-    $bars = \App\Models\Bar::orderBy('name')->get();
 @endphp
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
 <style>
@@ -224,7 +223,10 @@
                         <div class="row">
                             <div class="col-md-4 mb-3">
                                 <label class="form-label">Base Unit *</label>
-                                <input type="text" name="base_unit" id="base_unit" class="form-control" value="{{ old('base_unit', 'Bottle') }}" required placeholder="e.g., Bottle">
+                                <select name="base_unit" id="base_unit" class="form-control" required>
+                                    <option value="Bottle" {{ old('base_unit', $warehouseStock->units()->where('is_base_unit', true)->value('unit_name') ?? 'Bottle') == 'Bottle' ? 'selected' : '' }}>Bottle</option>
+                                    <option value="Shot" {{ old('base_unit', $warehouseStock->units()->where('is_base_unit', true)->value('unit_name') ?? '') == 'Shot' ? 'selected' : '' }}>Shot</option>
+                                </select>
                                 <div class="helper-text">The smallest unit for selling (e.g., Bottle, Shot)</div>
                             </div>
 

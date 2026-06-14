@@ -141,7 +141,7 @@
                 <i class="bi bi-person-plus-fill"></i>
             </div>
             <h4 class="brand-name">Join Pixies Bar</h4>
-            <p class="text-muted small">Create an account to manage your bar operations.</p>
+            <p class="text-muted small">Create your account. An administrator will assign your role.</p>
         </div>
         
         <div class="register-body">
@@ -190,7 +190,7 @@
                 </div>
                 
                 <button type="submit" class="btn-register">
-                    Create Manager Account
+                    Create Account
                 </button>
                 
                 <div class="footer-link">

@@ -115,6 +115,18 @@
                     <span class="badge {{ $warehouseStock->status_badge_class }}">{{ $warehouseStock->item_status }}</span>
                 </div>
                 <div class="col-md-3 mb-3">
+                    <div class="info-label">Purchase Unit</div>
+                    <div class="info-value">{{ $warehouseStock->purchase_unit ?? 'N/A' }}</div>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <div class="info-label">Base Unit</div>
+                    <div class="info-value">{{ $warehouseStock->units->firstWhere('is_base_unit', true)?->unit_name ?? 'N/A' }}</div>
+                </div>
+                <div class="col-md-3 mb-3">
+                    <div class="info-label">Conversion</div>
+                    <div class="info-value">{{ $warehouseStock->units->where('is_base_unit', false)->firstWhere('unit_name', $warehouseStock->purchase_unit)?->conversion_factor ?? '—' }} per {{ $warehouseStock->purchase_unit ?? 'unit' }}</div>
+                </div>
+                <div class="col-md-3 mb-3">
                     <div class="info-label">Expiry Date</div>
                     <div class="info-value">{{ $warehouseStock->expiry_date ? $warehouseStock->expiry_date->format('M d, Y') : 'N/A' }}</div>
                 </div>
@@ -129,7 +141,60 @@
             </div>
         </div>
 
-        <!-- SECTION B: Cost Summary -->
+        <!-- SECTION B: Units & Pricing -->
+        <div class="section-card">
+            <div class="section-title">
+                <i class="bi bi-list-ul me-2"></i>Units &amp; Selling Prices
+            </div>
+            <div class="table-responsive">
+                <table class="table ledger-table mb-0">
+                    <thead>
+                        <tr>
+                            <th>Unit</th>
+                            <th>Type</th>
+                            <th>Contains</th>
+                            <th>Cost</th>
+                            @foreach($bars as $bar)
+                                <th>{{ $bar->name }}</th>
+                            @endforeach
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @forelse($warehouseStock->units as $unit)
+                            <tr>
+                                <td class="fw-semibold">{{ $unit->unit_name }}</td>
+                                <td>
+                                    @if($unit->is_base_unit)
+                                        <span class="badge bg-primary">Base</span>
+                                    @elseif($unit->unit_name === $warehouseStock->purchase_unit)
+                                        <span class="badge bg-secondary">Purchase</span>
+                                    @else
+                                        <span class="badge bg-info text-dark">Selling</span>
+                                    @endif
+                                </td>
+                                <td>{{ $unit->is_base_unit ? '1' : $unit->conversion_factor . ' ' . ($warehouseStock->units->firstWhere('is_base_unit', true)?->unit_name ?? 'units') }}</td>
+                                <td>MWK {{ number_format($unit->purchase_price, 0) }}</td>
+                                @foreach($bars as $bar)
+                                    @php $barPrice = $unit->barPrices->firstWhere('bar_id', $bar->id); @endphp
+                                    <td>
+                                        @if($barPrice)
+                                            <span class="fw-semibold text-primary">MWK {{ number_format($barPrice->selling_price, 0) }}</span>
+                                        @else
+                                            <span class="text-muted">—</span>
+                                        @endif
+                                    </td>
+                                @endforeach
+                            </tr>
+                        @empty
+                            <tr><td colspan="{{ 4 + $bars->count() }}" class="text-center text-muted py-3">No units configured.</td></tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+            <p class="small text-muted mb-0 mt-2">Additional unit prices flow to seller stock entry when items are transferred.</p>
+        </div>
+
+        <!-- SECTION C: Cost Summary -->
         <div class="section-card">
             <div class="section-title">
                 <i class="bi bi-currency-dollar me-2"></i>Cost Summary
@@ -152,7 +217,7 @@
             </div>
         </div>
 
-        <!-- SECTION C: Branch Pricing -->
+        <!-- SECTION D: Branch Pricing -->
         <div class="section-card">
             <div class="section-title">
                 <i class="bi bi-shop me-2"></i>Branch Pricing
@@ -187,7 +252,7 @@
             </div>
         </div>
 
-        <!-- SECTION D: Inventory Ledger -->
+        <!-- SECTION E: Inventory Ledger -->
         <div class="section-card">
             <div class="section-title">
                 <i class="bi bi-journal-text me-2"></i>Inventory Ledger
@@ -234,7 +299,7 @@
             </div>
         </div>
 
-        <!-- SECTION E: Audit Summary -->
+        <!-- SECTION F: Audit Summary -->
         <div class="section-card">
             <div class="section-title">
                 <i class="bi bi-graph-up me-2"></i>Audit Summary

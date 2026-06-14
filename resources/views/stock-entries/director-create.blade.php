@@ -164,7 +164,7 @@
         @php
             $allRequests = $transferRequests ?? collect();
             $pendingCount = $allRequests->where('status', 'pending')->count();
-            $approvedCount = $allRequests->where('status', 'approved')->count();
+            $approvedCount = $allRequests->whereIn('status', ['approved', 'partially_approved'])->count();
             $rejectedCount = $allRequests->where('status', 'rejected')->count();
         @endphp
 
@@ -236,26 +236,64 @@
             <div class="request-card" data-status="{{ $req->status }}">
                 <div class="request-card-header d-flex justify-content-between align-items-center">
                     <div class="d-flex align-items-center gap-2 flex-wrap">
-                        <span class="badge bg-primary text-uppercase px-3 py-2 rounded-pill fw-bold" style="font-size:0.7rem">{{ $req->bar->name }}</span>
-                        <span class="status-badge status-{{ $req->status }}">{{ ucfirst($req->status) }}</span>
+                        <span class="badge bg-primary text-uppercase px-3 py-2 rounded-pill fw-bold" style="font-size:0.7rem">{{ $req->resolveBarName() }}</span>
+                        <span class="status-badge status-{{ $req->status === 'partially_approved' ? 'approved' : $req->status }}">
+                            {{ $req->status === 'partially_approved' ? 'Partially Approved' : ucfirst(str_replace('_', ' ', $req->status)) }}
+                        </span>
+                        @if($req->items->count() > 0)
+                            <span class="badge bg-light text-dark border">{{ $req->items->count() }} items · {{ $req->items->sum('quantity_requested') }} requested</span>
+                        @endif
                     </div>
-                    <div class="text-muted small">
-                        <i class="bi bi-calendar3 me-1"></i>{{ $req->requested_at ? $req->requested_at->format('M d, Y h:i A') : $req->created_at->format('M d, Y h:i A') }}
+                    <div class="text-muted small text-end">
+                        <div><i class="bi bi-calendar3 me-1"></i>{{ $req->requested_at ? $req->requested_at->format('M d, Y h:i A') : $req->created_at->format('M d, Y h:i A') }}</div>
+                        @if($req->requestedBy)
+                            <div><i class="bi bi-person me-1"></i>{{ $req->requestedBy->name }}</div>
+                        @endif
                     </div>
                 </div>
                 <div class="request-card-body">
-                    {{-- Items chips --}}
-                    <div class="d-flex flex-wrap gap-2 mb-2">
-                        @foreach($req->items as $item)
-                            <div class="item-chip">
-                                <span>{{ $item->warehouseStock->item_name ?? 'Unknown' }}</span>
-                                <span class="qty">{{ $item->quantity_requested }} {{ $item->unit_name ?? 'units' }}</span>
-                                @if($req->status === 'approved' && $item->quantity_approved > 0)
-                                    <span class="text-success" style="font-size:0.7rem">✓ {{ $item->quantity_approved }}</span>
-                                @endif
-                            </div>
-                        @endforeach
-                    </div>
+                    @if($req->items->isNotEmpty())
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover mb-0 align-middle" style="font-size:0.85rem">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th class="ps-3">Item</th>
+                                        <th class="text-center">Unit</th>
+                                        <th class="text-center">Requested</th>
+                                        <th class="text-center pe-3">Approved</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($req->items as $item)
+                                        <tr>
+                                            <td class="ps-3 fw-semibold">{{ $item->display_name }}</td>
+                                            <td class="text-center text-muted">{{ $item->unit_name ?? 'units' }}</td>
+                                            <td class="text-center fw-bold text-primary">{{ number_format($item->quantity_requested) }}</td>
+                                            <td class="text-center pe-3 fw-bold {{ $item->quantity_approved > 0 ? 'text-success' : 'text-muted' }}">
+                                                @if(in_array($req->status, ['approved', 'partially_approved', 'rejected']))
+                                                    {{ number_format($item->quantity_approved) }}
+                                                @else
+                                                    —
+                                                @endif
+                                            </td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                                <tfoot class="table-light">
+                                    <tr class="fw-bold">
+                                        <td class="ps-3">Total</td>
+                                        <td></td>
+                                        <td class="text-center">{{ number_format($req->items->sum('quantity_requested')) }}</td>
+                                        <td class="text-center pe-3 text-success">{{ number_format($req->items->sum('quantity_approved')) }}</td>
+                                    </tr>
+                                </tfoot>
+                            </table>
+                        </div>
+                    @else
+                        <div class="alert alert-light border small mb-0 text-muted">
+                            <i class="bi bi-info-circle me-1"></i>No line items were recorded for this request.
+                        </div>
+                    @endif
 
                     {{-- Notes / Rejection Reason --}}
                     @if($req->notes && $req->status !== 'rejected')
@@ -268,7 +306,7 @@
                             <strong class="text-danger">Rejection Reason:</strong> {{ $req->rejection_reason }}
                         </div>
                     @endif
-                    @if($req->status === 'approved' && $req->approvedBy)
+                    @if(in_array($req->status, ['approved', 'partially_approved']) && $req->approvedBy)
                         <div class="text-muted mt-2" style="font-size:0.75rem">
                             <i class="bi bi-person-check me-1"></i>Approved by <strong>{{ $req->approvedBy->name }}</strong>
                             @if($req->approved_at) on {{ $req->approved_at->format('M d, Y h:i A') }}@endif
@@ -305,7 +343,7 @@
                     <label class="form-label fw-bold small text-uppercase text-muted">Select Target Bar</label>
                     <select id="requestBarSelect" class="form-select" onchange="loadWarehouseItems()">
                         <option value="">-- Choose a bar --</option>
-                        @foreach(\App\Models\Bar::all() as $bar)
+                        @foreach(\App\Models\Bar::listed()->orderBy('name')->get() as $bar)
                             <option value="{{ $bar->id }}">{{ $bar->name }}</option>
                         @endforeach
                     </select>

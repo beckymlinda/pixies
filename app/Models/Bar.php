@@ -6,7 +6,14 @@ use Illuminate\Database\Eloquent\Model;
 
 class Bar extends Model
 {
+    public const EXCLUDED_NAMES = ['Pixies Njerwa'];
+
     protected $fillable = ['name'];
+
+    public function scopeListed($query)
+    {
+        return $query->whereNotIn('name', self::EXCLUDED_NAMES);
+    }
 
     public function barItemPrices()
     {

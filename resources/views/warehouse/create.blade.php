@@ -1,316 +1,248 @@
 @extends('layouts.app')
 
 @section('content')
-@php 
-    $pageTitle = 'Add Warehouse Item'; 
-    $bars = \App\Models\Bar::orderBy('name')->get();
-@endphp
+@php $pageTitle = 'Add Warehouse Item'; @endphp
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
 <style>
     .form-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
+        margin: -1.5rem -1.5rem 2rem;
         padding: 1.5rem 2rem;
-        margin-bottom: 2rem;
     }
     .form-card {
         border-radius: 16px;
-        border: 1px solid rgba(226, 232, 240, 0.8);
+        border: 1px solid #e2e8f0;
         background: white;
-        overflow: hidden;
     }
-    .section-card {
+    .step-card {
         border-radius: 12px;
         border: 1px solid #e2e8f0;
         background: #f8fafc;
-        padding: 1.5rem;
-        margin-bottom: 1.5rem;
+        padding: 1.25rem 1.5rem;
+        margin-bottom: 1.25rem;
     }
-    .section-title {
-        font-size: 0.9rem;
+    .step-number {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #1e293b;
+        color: white;
+        font-size: 0.8rem;
+        font-weight: 700;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-right: 0.5rem;
+    }
+    .step-title {
+        font-size: 0.95rem;
         font-weight: 700;
         color: #1e293b;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
         margin-bottom: 1rem;
-        padding-bottom: 0.5rem;
-        border-bottom: 2px solid #e2e8f0;
     }
     .form-label {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 600;
         color: #475569;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 0.5rem;
+        margin-bottom: 0.35rem;
     }
-    .form-control {
+    .form-control, .form-select {
         border-radius: 10px;
         border: 1px solid #e2e8f0;
-        padding: 0.75rem 1rem;
+        padding: 0.65rem 0.85rem;
         font-size: 0.95rem;
     }
-    .form-control:focus {
-        border-color: var(--pixies-primary);
-        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+    .helper-text {
+        font-size: 0.72rem;
+        color: #94a3b8;
+        margin-top: 0.2rem;
     }
-    .calculation-box {
+    .calc-strip {
         background: white;
-        border-radius: 8px;
-        padding: 1rem;
         border: 1px solid #e2e8f0;
-        margin-top: 1rem;
+        border-radius: 10px;
+        padding: 0.85rem 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
     }
-    .calculation-label {
-        font-size: 0.75rem;
-        color: #64748b;
+    .calc-strip .item .lbl { font-size: 0.65rem; color: #94a3b8; text-transform: uppercase; }
+    .calc-strip .item .val { font-weight: 700; color: #1e293b; }
+    .calc-strip .item .val.hl { color: #2563eb; }
+    .branch-table th {
+        font-size: 0.7rem;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 0.25rem;
+        color: #64748b;
+        background: #f1f5f9;
+        padding: 0.6rem 0.75rem;
     }
-    .calculation-value {
-        font-size: 1.1rem;
-        font-weight: 700;
-        color: #1e293b;
-    }
-    .calculation-value.highlight {
-        color: #3b82f6;
-    }
-    .profit-positive {
-        color: #10b981;
-    }
-    .profit-negative {
-        color: #ef4444;
-    }
-    .profit-low {
-        color: #f59e0b;
-    }
-    .unit-row {
+    .branch-table td { padding: 0.6rem 0.75rem; vertical-align: middle; }
+    .unit-block {
         background: white;
+        border: 1px solid #e2e8f0;
         border-radius: 10px;
         padding: 1rem;
-        margin-bottom: 1rem;
-        border: 1px solid #e2e8f0;
-    }
-    .bar-price-row {
-        background: white;
-        border-radius: 8px;
-        padding: 1rem;
         margin-bottom: 0.75rem;
-        border: 1px solid #e2e8f0;
     }
-    .helper-text {
-        font-size: 0.75rem;
-        color: #64748b;
-        margin-top: 0.25rem;
-    }
+    .profit-positive { color: #059669; }
+    .profit-negative { color: #dc2626; }
+    .profit-low { color: #d97706; }
 </style>
 
 <div class="container-fluid p-0">
     <div class="form-header shadow-sm">
-        <div class="d-flex align-items-center justify-content-between">
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div>
-                <h1 class="h3 fw-bold mb-1 text-dark">Add Warehouse Item</h1>
-                <p class="text-muted small mb-0">Add inventory with automatic cost calculations and profit tracking.</p>
+                <h1 class="h3 fw-bold mb-1">Add Warehouse Item</h1>
+                <p class="text-muted small mb-0">Four simple steps — costs and prices are calculated for you.</p>
             </div>
             <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary rounded-pill px-4">
-                <i class="bi bi-arrow-left me-2"></i>Back to List
+                <i class="bi bi-arrow-left me-1"></i>Back
             </a>
         </div>
     </div>
 
-    <div class="px-4">
+    <div class="px-4 pb-4">
         <div class="card form-card shadow-sm border-0">
             <div class="card-body p-4">
                 <form method="POST" action="{{ route('warehouse.store') }}" id="warehouseForm">
                     @csrf
-                    
-                    <!-- SECTION 1: Item Information -->
-                    <div class="section-card">
-                        <div class="section-title">
-                            <i class="bi bi-box-seam me-2"></i>Item Information
-                        </div>
-                        <div class="row">
-                            <div class="col-md-6 mb-3">
+
+                    {{-- STEP 1: Item --}}
+                    <div class="step-card">
+                        <div class="step-title"><span class="step-number">1</span>What is the item?</div>
+                        <div class="row g-3">
+                            <div class="col-md-8">
                                 <label class="form-label">Item Name *</label>
-                                <input type="text" name="item_name" class="form-control @error('item_name') is-invalid @enderror" value="{{ old('item_name') }}" required placeholder="e.g., Castle Lite">
-                                @error('item_name')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
+                                <input type="text" name="item_name" class="form-control @error('item_name') is-invalid @enderror"
+                                       value="{{ old('item_name') }}" required placeholder="e.g. Castle Lite">
+                                @error('item_name')<div class="invalid-feedback">{{ $message }}</div>@enderror
                             </div>
-
-                            <div class="col-md-6 mb-3">
-                                <label class="form-label">Alert Quantity *</label>
-                                <input type="number" name="alert_quantity" class="form-control @error('alert_quantity') is-invalid @enderror" value="{{ old('alert_quantity', 10) }}" required min="0" placeholder="Alert when stock falls below this">
-                                @error('alert_quantity')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                                <div class="helper-text">You will be alerted when stock reaches this quantity</div>
-                            </div>
-
-                            <div class="col-md-6 mb-3">
-                                <label class="form-label">Expiry Date</label>
-                                <input type="date" name="expiry_date" class="form-control @error('expiry_date') is-invalid @enderror" value="{{ old('expiry_date') }}" min="{{ now()->format('Y-m-d') }}">
-                                @error('expiry_date')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                                <div class="helper-text">Optional - leave blank if item doesn't expire</div>
-                            </div>
-
-                            <div class="col-md-6 mb-3">
-                                <label class="form-label">Notes</label>
-                                <textarea name="notes" class="form-control @error('notes') is-invalid @enderror" rows="1" placeholder="Add any additional notes...">{{ old('notes') }}</textarea>
-                                @error('notes')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
+                            <div class="col-md-4">
+                                <label class="form-label">Low Stock Alert *</label>
+                                <input type="number" name="alert_quantity" class="form-control @error('alert_quantity') is-invalid @enderror"
+                                       value="{{ old('alert_quantity', 10) }}" required min="0">
+                                <div class="helper-text">Alert when stock falls below this</div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- SECTION 2: Purchase Information -->
-                    <div class="section-card">
-                        <div class="section-title">
-                            <i class="bi bi-cart me-2"></i>Purchase Information
-                        </div>
-                        <div class="row">
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Purchase Unit *</label>
-                                <select name="purchase_unit" id="purchase_unit" class="form-control @error('purchase_unit') is-invalid @enderror" required>
-                                    <option value="">Select unit...</option>
-                                    <option value="Crate" {{ old('purchase_unit') == 'Crate' ? 'selected' : '' }}>Crate</option>
-                                    <option value="Carton" {{ old('purchase_unit') == 'Carton' ? 'selected' : '' }}>Carton</option>
-                                    <option value="Box" {{ old('purchase_unit') == 'Box' ? 'selected' : '' }}>Box</option>
-                                    <option value="Bottle" {{ old('purchase_unit') == 'Bottle' ? 'selected' : '' }}>Bottle</option>
-                                    <option value="Keg" {{ old('purchase_unit') == 'Keg' ? 'selected' : '' }}>Keg</option>
-                                    <option value="Case" {{ old('purchase_unit') == 'Case' ? 'selected' : '' }}>Case</option>
-                                    <option value="Pack" {{ old('purchase_unit') == 'Pack' ? 'selected' : '' }}>Pack</option>
-                                    <option value="Other" {{ old('purchase_unit') == 'Other' ? 'selected' : '' }}>Other</option>
-                                </select>
-                                @error('purchase_unit')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                                <div class="helper-text">The unit you purchased the item in</div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Quantity Purchased *</label>
-                                <input type="number" name="quantity_purchased" id="quantity_purchased" class="form-control @error('quantity_purchased') is-invalid @enderror" value="{{ old('quantity_purchased') }}" required min="1" placeholder="e.g., 3">
-                                @error('quantity_purchased')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                                <div class="helper-text">Number of purchase units bought</div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Total Purchase Cost (MWK) *</label>
-                                <input type="number" name="total_purchase_cost" id="total_purchase_cost" class="form-control @error('total_purchase_cost') is-invalid @enderror" value="{{ old('total_purchase_cost') }}" required min="0" step="0.01" placeholder="e.g., 108000">
-                                @error('total_purchase_cost')
-                                    <div class="invalid-feedback">{{ $message }}</div>
-                                @enderror
-                                <div class="helper-text">Total amount paid for this purchase</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- SECTION 3: Units & Conversions -->
-                    <div class="section-card">
-                        <div class="section-title">
-                            <i class="bi bi-calculator me-2"></i>Units & Conversions
-                        </div>
-                        <div class="row">
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Base Unit *</label>
-                                <input type="text" name="base_unit" id="base_unit" class="form-control" value="Bottle" required placeholder="e.g., Bottle">
-                                <div class="helper-text">The smallest unit for selling (e.g., Bottle, Shot)</div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Conversion Factor *</label>
-                                <input type="number" name="conversion_factor" id="conversion_factor" class="form-control" value="24" required min="1" step="1" placeholder="e.g., 24">
-                                <div class="helper-text">How many base units in 1 {{ old('purchase_unit', 'Crate') }}?</div>
-                            </div>
-
-                            <div class="col-md-4 mb-3">
-                                <label class="form-label">Stock Quantity (Base Units) *</label>
-                                <input type="number" name="quantity" id="quantity" class="form-control" required min="0" placeholder="Auto-calculated">
-                                <div class="helper-text">Total stock in base units</div>
-                            </div>
-                        </div>
-
-                        <!-- Live Calculations -->
-                        <div class="calculation-box">
-                            <div class="row">
-                                <div class="col-md-3">
-                                    <div class="calculation-label">Total Base Units</div>
-                                    <div class="calculation-value" id="totalBaseUnits">0</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="calculation-label">Cost Per Base Unit</div>
-                                    <div class="calculation-value highlight" id="costPerBaseUnit">MWK 0.00</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="calculation-label">Cost Per {{ old('purchase_unit', 'Crate') }}</div>
-                                    <div class="calculation-value" id="costPerPurchaseUnit">MWK 0.00</div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="calculation-label">Estimated Stock Value</div>
-                                    <div class="calculation-value" id="estimatedStockValue">MWK 0.00</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- SECTION 4: Additional Units -->
-                    <div class="section-card">
-                        <div class="section-title">
-                            <i class="bi bi-list-ul me-2"></i>Additional Units
-                        </div>
-
-                        <div id="additionalUnitsContainer"></div>
-
-                        <div class="d-flex justify-content-end mt-2">
-                            <button type="button" id="addUnitBtn" class="btn btn-sm btn-outline-primary">Add Unit</button>
-                        </div>
-                        <div class="helper-text mt-2">Add alternative selling units (e.g., 6 pack) and set their conversion and default selling prices.</div>
-                    </div>
-
-                    <!-- SECTION 5: Branch Selling Prices -->
-                    <div class="section-card">
-                        <div class="section-title">
-                            <i class="bi bi-shop me-2"></i>Branch Selling Prices
-                        </div>
-                        <div class="row">
-                            @foreach($bars as $bar)
-                                <div class="col-md-6 mb-3">
-                                    <div class="bar-price-row">
-                                        <div class="d-flex justify-content-between align-items-center mb-2">
-                                            <label class="form-label mb-0">{{ $bar->name }}</label>
-                                            <span class="badge bg-light text-dark" id="profit-badge-{{ $bar->id }}">--</span>
-                                        </div>
-                                        <div class="row g-2">
-                                            <div class="col-6">
-                                                <label class="small text-muted">Selling Price (MWK)</label>
-                                                <input type="number" name="bar_selling_prices[{{ $bar->id }}]" class="form-control bar-selling-price" data-bar-id="{{ $bar->id }}" placeholder="0.00" min="0" step="0.01">
-                                            </div>
-                                            <div class="col-6">
-                                                <label class="small text-muted">Profit</label>
-                                                <div class="calculation-value" id="profit-{{ $bar->id }}">MWK 0.00</div>
-                                                <div class="small profit-percentage" id="profit-percent-{{ $bar->id }}">0%</div>
-                                            </div>
-                                        </div>
+                        <div class="mt-2">
+                            <a class="small text-primary text-decoration-none" data-bs-toggle="collapse" href="#optionalFields">+ Optional: expiry date &amp; notes</a>
+                            <div class="collapse mt-2" id="optionalFields">
+                                <div class="row g-3">
+                                    <div class="col-md-4">
+                                        <label class="form-label">Expiry Date</label>
+                                        <input type="date" name="expiry_date" class="form-control" value="{{ old('expiry_date') }}" min="{{ now()->format('Y-m-d') }}">
+                                    </div>
+                                    <div class="col-md-8">
+                                        <label class="form-label">Notes</label>
+                                        <input type="text" name="notes" class="form-control" value="{{ old('notes') }}" placeholder="Any extra notes">
                                     </div>
                                 </div>
-                            @endforeach
+                            </div>
                         </div>
                     </div>
 
-                    <div class="d-flex gap-2 justify-content-end mt-4">
+                    {{-- STEP 2: Purchase & units --}}
+                    <div class="step-card">
+                        <div class="step-title"><span class="step-number">2</span>What did you buy?</div>
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <label class="form-label">Bought As *</label>
+                                <select name="purchase_unit" id="purchase_unit" class="form-select" required>
+                                    <option value="">Select...</option>
+                                    @foreach(['Crate','Carton','Box','Case','Pack','Keg','Bottle','Other'] as $unit)
+                                        <option value="{{ $unit }}" {{ old('purchase_unit') == $unit ? 'selected' : '' }}>{{ $unit }}</option>
+                                    @endforeach
+                                </select>
+                                <div class="helper-text">The unit you paid for</div>
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">How Many? *</label>
+                                <input type="number" name="quantity_purchased" id="quantity_purchased" class="form-control"
+                                       value="{{ old('quantity_purchased') }}" required min="1" placeholder="e.g. 3">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Total Paid (MWK) *</label>
+                                <input type="number" name="total_purchase_cost" id="total_purchase_cost" class="form-control"
+                                       value="{{ old('total_purchase_cost') }}" required min="0" step="0.01" placeholder="e.g. 108000">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label">Sell As (Base Unit) *</label>
+                                <select name="base_unit" id="base_unit" class="form-select" required>
+                                    <option value="Bottle" {{ old('base_unit', 'Bottle') == 'Bottle' ? 'selected' : '' }}>Bottle</option>
+                                    <option value="Shot" {{ old('base_unit') == 'Shot' ? 'selected' : '' }}>Shot</option>
+                                </select>
+                                <div class="helper-text">Smallest unit sold at the bar</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label" id="conversion_label">Bottles per purchase unit *</label>
+                                <input type="number" name="conversion_factor" id="conversion_factor" class="form-control"
+                                       value="{{ old('conversion_factor', 24) }}" required min="1" step="1">
+                                <div class="helper-text" id="conversion_hint">How many bottles in 1 crate?</div>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Total Stock (auto)</label>
+                                <input type="number" name="quantity" id="quantity" class="form-control bg-light" required min="0" readonly>
+                                <div class="helper-text">Calculated from purchase above</div>
+                            </div>
+                        </div>
+                        <div class="calc-strip mt-3">
+                            <div class="item"><div class="lbl">Total Units</div><div class="val" id="totalBaseUnits">0</div></div>
+                            <div class="item"><div class="lbl">Cost per Unit</div><div class="val hl" id="costPerBaseUnit">MWK 0</div></div>
+                            <div class="item"><div class="lbl">Cost per Purchase Unit</div><div class="val" id="costPerPurchaseUnit">MWK 0</div></div>
+                        </div>
+                    </div>
+
+                    {{-- STEP 3: Branch prices --}}
+                    <div class="step-card">
+                        <div class="step-title"><span class="step-number">3</span>What price at each branch?</div>
+                        <p class="small text-muted mb-3">Set the selling price per {{ old('base_unit', 'bottle') }} for each location. Sellers will see these prices in stock entry.</p>
+                        <div class="table-responsive">
+                            <table class="table table-sm branch-table mb-0">
+                                <thead>
+                                    <tr>
+                                        <th>Branch</th>
+                                        <th style="width:180px">Selling Price (MWK)</th>
+                                        <th>Profit per Unit</th>
+                                        <th style="width:90px">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach($bars as $bar)
+                                    <tr>
+                                        <td class="fw-semibold">{{ $bar->name }}</td>
+                                        <td>
+                                            <input type="number" name="bar_selling_prices[{{ $bar->id }}]"
+                                                   class="form-control form-control-sm bar-selling-price"
+                                                   data-bar-id="{{ $bar->id }}" placeholder="0" min="0" step="0.01">
+                                        </td>
+                                        <td>
+                                            <span class="fw-semibold" id="profit-{{ $bar->id }}">—</span>
+                                            <span class="small text-muted" id="profit-percent-{{ $bar->id }}"></span>
+                                        </td>
+                                        <td><span class="badge bg-light text-dark" id="profit-badge-{{ $bar->id }}">—</span></td>
+                                    </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {{-- STEP 4: Additional units (after branch pricing) --}}
+                    <div class="step-card">
+                        <div class="step-title"><span class="step-number">4</span>Other ways to sell? <span class="fw-normal text-muted">(optional)</span></div>
+                        <p class="small text-muted mb-2">e.g. 6-pack, 4-pack — these appear in seller stock entry with their own prices.</p>
+                        <div id="additionalUnitsContainer"></div>
+                        <button type="button" id="addUnitBtn" class="btn btn-sm btn-outline-primary">
+                            <i class="bi bi-plus-lg me-1"></i>Add Selling Unit
+                        </button>
+                    </div>
+
+                    <div class="d-flex gap-2 justify-content-end mt-3">
                         <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary rounded-pill px-4">Cancel</a>
                         <button type="submit" class="btn btn-primary rounded-pill px-4">
-                            <i class="bi bi-check-lg me-2"></i>Add Item
+                            <i class="bi bi-check-lg me-1"></i>Save Item
                         </button>
                     </div>
                 </form>
@@ -320,216 +252,171 @@
 </div>
 
 <script>
-// Live calculation logic
+const BARS = @json($bars->map(function ($b) { return ['id' => $b->id, 'name' => $b->name]; })->values());
+const UNIT_PRESETS = {
+    '6 Pack': 6,
+    '4 Pack': 4,
+    '12 Pack': 12,
+    'Half Crate': 12,
+    'Custom': 0
+};
+
 const purchaseUnitInput = document.getElementById('purchase_unit');
 const quantityPurchasedInput = document.getElementById('quantity_purchased');
 const totalPurchaseCostInput = document.getElementById('total_purchase_cost');
 const conversionFactorInput = document.getElementById('conversion_factor');
 const quantityInput = document.getElementById('quantity');
 const baseUnitInput = document.getElementById('base_unit');
+const conversionLabel = document.getElementById('conversion_label');
+const conversionHint = document.getElementById('conversion_hint');
 
-// Calculation displays
-const totalBaseUnitsDisplay = document.getElementById('totalBaseUnits');
-const costPerBaseUnitDisplay = document.getElementById('costPerBaseUnit');
-const costPerPurchaseUnitDisplay = document.getElementById('costPerPurchaseUnit');
-const estimatedStockValueDisplay = document.getElementById('estimatedStockValue');
+function getBaseUnitLabel() {
+    return baseUnitInput.value || 'Unit';
+}
+
+function updateConversionLabels() {
+    const base = getBaseUnitLabel().toLowerCase() + 's';
+    const purchase = purchaseUnitInput.value || 'purchase unit';
+    conversionLabel.textContent = base.charAt(0).toUpperCase() + base.slice(1) + ' per ' + purchase + ' *';
+    conversionHint.textContent = 'How many ' + base + ' in 1 ' + purchase + '?';
+}
 
 function calculateAll() {
-    const purchaseUnit = purchaseUnitInput.value || 'Unit';
     const quantityPurchased = parseFloat(quantityPurchasedInput.value) || 0;
     const totalPurchaseCost = parseFloat(totalPurchaseCostInput.value) || 0;
     const conversionFactor = parseFloat(conversionFactorInput.value) || 1;
-    const quantity = parseFloat(quantityInput.value) || 0;
-
-    // Calculate total base units
     const totalBaseUnits = quantityPurchased * conversionFactor;
-    totalBaseUnitsDisplay.textContent = totalBaseUnits.toLocaleString();
-
-    // Calculate cost per base unit
     const costPerBaseUnit = totalBaseUnits > 0 ? totalPurchaseCost / totalBaseUnits : 0;
-    costPerBaseUnitDisplay.textContent = 'MWK ' + costPerBaseUnit.toFixed(2);
-
-    // Calculate cost per purchase unit
     const costPerPurchaseUnit = quantityPurchased > 0 ? totalPurchaseCost / quantityPurchased : 0;
-    costPerPurchaseUnitDisplay.textContent = 'MWK ' + costPerPurchaseUnit.toFixed(2);
 
-    // Update helper text
-    const helperText = conversionFactorInput.nextElementSibling;
-    if (helperText) {
-        helperText.textContent = `How many ${baseUnitInput.value}s in 1 ${purchaseUnit}?`;
-    }
+    document.getElementById('totalBaseUnits').textContent = totalBaseUnits.toLocaleString();
+    document.getElementById('costPerBaseUnit').textContent = 'MWK ' + costPerBaseUnit.toFixed(0);
+    document.getElementById('costPerPurchaseUnit').textContent = 'MWK ' + costPerPurchaseUnit.toFixed(0);
 
-    // Calculate estimated stock value
-    const estimatedStockValue = quantity * costPerBaseUnit;
-    estimatedStockValueDisplay.textContent = 'MWK ' + estimatedStockValue.toFixed(2);
-
-    // Calculate profits for each bar
     document.querySelectorAll('.bar-selling-price').forEach(input => {
         const barId = input.dataset.barId;
         const sellingPrice = parseFloat(input.value) || 0;
         const profit = sellingPrice - costPerBaseUnit;
         const profitPercent = costPerBaseUnit > 0 ? (profit / costPerBaseUnit) * 100 : 0;
+        const profitEl = document.getElementById('profit-' + barId);
+        const percentEl = document.getElementById('profit-percent-' + barId);
+        const badge = document.getElementById('profit-badge-' + barId);
 
-        const profitDisplay = document.getElementById(`profit-${barId}`);
-        const profitPercentDisplay = document.getElementById(`profit-percent-${barId}`);
-        const profitBadge = document.getElementById(`profit-badge-${barId}`);
-
-        profitDisplay.textContent = 'MWK ' + profit.toFixed(2);
-        profitPercentDisplay.textContent = profitPercent.toFixed(1) + '%';
-
-        // Update profit badge
         if (sellingPrice > 0) {
-            if (profitPercent < 0) {
-                profitBadge.className = 'badge bg-danger';
-                profitBadge.textContent = 'Loss';
-            } else if (profitPercent < 10) {
-                profitBadge.className = 'badge bg-warning text-dark';
-                profitBadge.textContent = 'Low Profit';
-            } else {
-                profitBadge.className = 'badge bg-success';
-                profitBadge.textContent = 'Good';
-            }
+            profitEl.textContent = 'MWK ' + profit.toFixed(0);
+            percentEl.textContent = ' (' + profitPercent.toFixed(0) + '% markup)';
+            profitEl.className = 'fw-semibold ' + (profitPercent >= 10 ? 'profit-positive' : profitPercent >= 0 ? 'profit-low' : 'profit-negative');
+            if (profitPercent < 0) { badge.className = 'badge bg-danger'; badge.textContent = 'Loss'; }
+            else if (profitPercent < 10) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Low'; }
+            else { badge.className = 'badge bg-success'; badge.textContent = 'Good'; }
         } else {
-            profitBadge.className = 'badge bg-light text-dark';
-            profitBadge.textContent = '--';
+            profitEl.textContent = '—';
+            percentEl.textContent = '';
+            badge.className = 'badge bg-light text-dark';
+            badge.textContent = '—';
         }
-
-        // Update profit display color
-        profitDisplay.className = 'calculation-value ' + (profitPercent >= 0 ? (profitPercent >= 10 ? 'profit-positive' : 'profit-low') : 'profit-negative');
-        profitPercentDisplay.className = 'small profit-percentage ' + (profitPercent >= 0 ? (profitPercent >= 10 ? 'profit-positive' : 'profit-low') : 'profit-negative');
     });
 }
 
-// Auto-calculate quantity when purchase info changes
 function autoCalculateQuantity() {
-    const quantityPurchased = parseFloat(quantityPurchasedInput.value) || 0;
-    const conversionFactor = parseFloat(conversionFactorInput.value) || 1;
-    quantityInput.value = quantityPurchased * conversionFactor;
+    const qty = (parseFloat(quantityPurchasedInput.value) || 0) * (parseFloat(conversionFactorInput.value) || 1);
+    quantityInput.value = qty;
 }
 
-// Add event listeners
-purchaseUnitInput.addEventListener('change', () => {
-    calculateAll();
-    autoCalculateQuantity();
+[purchaseUnitInput, quantityPurchasedInput, totalPurchaseCostInput, conversionFactorInput, baseUnitInput].forEach(el => {
+    el.addEventListener('input', () => { updateConversionLabels(); calculateAll(); autoCalculateQuantity(); });
+    el.addEventListener('change', () => { updateConversionLabels(); calculateAll(); autoCalculateQuantity(); });
 });
-quantityPurchasedInput.addEventListener('input', () => {
-    calculateAll();
-    autoCalculateQuantity();
-});
-totalPurchaseCostInput.addEventListener('input', calculateAll);
-conversionFactorInput.addEventListener('input', () => {
-    calculateAll();
-    autoCalculateQuantity();
-});
-quantityInput.addEventListener('input', calculateAll);
-baseUnitInput.addEventListener('input', calculateAll);
+document.querySelectorAll('.bar-selling-price').forEach(el => el.addEventListener('input', calculateAll));
 
-document.querySelectorAll('.bar-selling-price').forEach(input => {
-    input.addEventListener('input', calculateAll);
-});
-
-// Initial calculation
+updateConversionLabels();
 calculateAll();
 autoCalculateQuantity();
 
-// Additional units dynamic UI
-const BARS = @json($bars->map(function($b){ return ['id' => $b->id, 'name' => $b->name]; })->toArray());
+// Additional units — expanded immediately, preset dropdown
 const additionalUnitsContainer = document.getElementById('additionalUnitsContainer');
-const addUnitBtn = document.getElementById('addUnitBtn');
 let additionalUnitIndex = 0;
 
-function createUnitRow(index, data = {}) {
-    const uniqueId = 'unit-' + index;
+function createUnitRow(index) {
     const wrapper = document.createElement('div');
-    wrapper.className = 'card border-0 shadow-sm mb-3';
+    wrapper.className = 'unit-block';
     wrapper.dataset.index = index;
 
-    const unitName = data.unit_name || 'New Unit';
-    
+    const presetOptions = Object.keys(UNIT_PRESETS).map(k =>
+        `<option value="${k}">${k}</option>`
+    ).join('');
+
     wrapper.innerHTML = `
-        <div class="card-header bg-light border-0">
-            <div class="d-flex justify-content-between align-items-center">
-                <div class="d-flex align-items-center gap-2">
-                    <button class="btn btn-sm btn-link text-decoration-none collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#${uniqueId}" aria-expanded="false">
-                        <i class="bi bi-chevron-down"></i>
-                    </button>
-                    <strong id="unit-label-${index}" class="mb-0">${unitName}</strong>
-                    <span class="badge bg-secondary" id="unit-cf-${index}">CF: 1</span>
-                </div>
-                <button type="button" class="btn btn-sm btn-outline-danger remove-unit-btn">Remove</button>
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <strong class="text-dark">Selling Unit #${index + 1}</strong>
+            <button type="button" class="btn btn-sm btn-outline-danger remove-unit-btn">Remove</button>
+        </div>
+        <div class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label">Unit Type *</label>
+                <select class="form-select unit-preset-select" data-index="${index}">
+                    <option value="">Choose a unit...</option>
+                    ${presetOptions}
+                </select>
+            </div>
+            <div class="col-md-4 unit-name-col">
+                <label class="form-label">Unit Name *</label>
+                <input type="text" name="additional_units[${index}][unit_name]" class="form-control unit-name-input" data-index="${index}" placeholder="e.g. 6 Pack" required>
+            </div>
+            <div class="col-md-4">
+                <label class="form-label">Contains (base units) *</label>
+                <input type="number" name="additional_units[${index}][conversion_factor]" class="form-control unit-cf-input" data-index="${index}" value="6" min="1" required>
+                <div class="helper-text">How many ${getBaseUnitLabel().toLowerCase()}s in 1 of this unit</div>
             </div>
         </div>
-        <div class="collapse" id="${uniqueId}">
-            <div class="card-body">
-                <div class="row g-3 mb-3">
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Unit Name *</label>
-                        <input type="text" name="additional_units[${index}][unit_name]" class="form-control unit-name-input" data-index="${index}" value="${data.unit_name || ''}" placeholder="e.g., 6 pack" required>
-                        <div class="helper-text">The display name for this unit</div>
+        <div class="mt-3 pt-3 border-top">
+            <label class="form-label mb-2">Selling Price per Branch (MWK)</label>
+            <div class="row g-2">
+                ${BARS.map(bar => `
+                    <div class="col-md-6 col-lg-4">
+                        <div class="input-group input-group-sm">
+                            <span class="input-group-text" style="min-width:110px;font-size:0.75rem">${bar.name}</span>
+                            <input type="number" name="additional_units[${index}][bar_selling_prices][${bar.id}]"
+                                   class="form-control" placeholder="Price" min="0" step="0.01">
+                        </div>
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Conversion Factor *</label>
-                        <input type="number" name="additional_units[${index}][conversion_factor]" class="form-control unit-cf-input" data-index="${index}" value="${data.conversion_factor || 1}" min="1" required>
-                        <div class="helper-text">How many base units in 1 of this unit?</div>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label small fw-bold">Default Selling Price (MWK)</label>
-                        <input type="number" name="additional_units[${index}][selling_price]" class="form-control" value="${data.selling_price || ''}" min="0" step="0.01">
-                        <div class="helper-text">Optional - leave blank to use base price</div>
-                    </div>
-                </div>
-
-                <div class="mt-3 pt-3 border-top">
-                    <h6 class="mb-3"><i class="bi bi-shop me-2"></i>Per-Branch Selling Prices (Optional)</h6>
-                    <div class="row g-2" id="bar-prices-${index}">
-                        ${BARS.map(bar => `
-                            <div class="col-md-6 col-lg-4">
-                                <div class="card border-light bg-light">
-                                    <div class="card-body p-2">
-                                        <label class="form-label small fw-bold mb-2">
-                                            <span class="badge bg-info text-dark">${bar.name}</span>
-                                        </label>
-                                        <input type="number" 
-                                               name="additional_units[${index}][bar_selling_prices][${bar.id}]" 
-                                               class="form-control form-control-sm" 
-                                               value="${(data.bar_selling_prices && data.bar_selling_prices[bar.id]) ? data.bar_selling_prices[bar.id] : ''}" 
-                                               placeholder="MWK" 
-                                               min="0" 
-                                               step="0.01">
-                                    </div>
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                    <div class="helper-text mt-2">Set custom selling prices for each branch. Leave blank to use default price.</div>
-                </div>
+                `).join('')}
             </div>
+            <div class="helper-text mt-1">Leave blank to use base unit price × conversion factor</div>
         </div>
     `;
 
-    // Update label and CF display when inputs change
+    const presetSelect = wrapper.querySelector('.unit-preset-select');
     const nameInput = wrapper.querySelector('.unit-name-input');
     const cfInput = wrapper.querySelector('.unit-cf-input');
-    
-    nameInput.addEventListener('input', () => {
-        document.getElementById(`unit-label-${index}`).textContent = nameInput.value || 'New Unit';
-    });
-    
-    cfInput.addEventListener('input', () => {
-        document.getElementById(`unit-cf-${index}`).textContent = 'CF: ' + (cfInput.value || '1');
+    const nameCol = wrapper.querySelector('.unit-name-col');
+
+    presetSelect.addEventListener('change', () => {
+        const preset = presetSelect.value;
+        if (!preset) return;
+        if (preset === 'Custom') {
+            nameInput.value = '';
+            nameInput.readOnly = false;
+            nameCol.style.display = '';
+            cfInput.value = 1;
+        } else {
+            nameInput.value = preset;
+            nameInput.readOnly = true;
+            cfInput.value = UNIT_PRESETS[preset];
+        }
     });
 
-    // Attach remove handler
-    wrapper.querySelector('.remove-unit-btn').addEventListener('click', () => {
-        wrapper.remove();
-    });
-
+    wrapper.querySelector('.remove-unit-btn').addEventListener('click', () => wrapper.remove());
     return wrapper;
 }
 
-addUnitBtn.addEventListener('click', () => {
+document.getElementById('addUnitBtn').addEventListener('click', () => {
     const row = createUnitRow(additionalUnitIndex++);
     additionalUnitsContainer.appendChild(row);
+    const preset = row.querySelector('.unit-preset-select');
+    preset.value = '6 Pack';
+    preset.dispatchEvent(new Event('change'));
+    preset.focus();
 });
 </script>
 @endsection

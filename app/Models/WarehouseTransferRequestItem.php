@@ -24,6 +24,13 @@ class WarehouseTransferRequestItem extends Model
         'conversion_factor' => 'integer',
     ];
 
+    public function getDisplayNameAttribute(): string
+    {
+        return $this->warehouseStock?->item_name
+            ?? $this->item?->name
+            ?? 'Unknown item';
+    }
+
     /**
      * Get the transfer request.
      */

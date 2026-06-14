@@ -155,17 +155,96 @@ class WarehouseStock extends Model
     }
 
     /**
-     * Get current stock value for a specific branch
+     * Get base unit selling price for a specific branch.
+     */
+    public function getSellingPriceForBranch(?int $barId): ?float
+    {
+        if (! $barId) {
+            return null;
+        }
+
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if (! $baseUnit) {
+            return (float) $this->selling_price;
+        }
+
+        $barPrice = $baseUnit->relationLoaded('barPrices')
+            ? $baseUnit->barPrices->firstWhere('bar_id', $barId)
+            : $baseUnit->barPrices()->where('bar_id', $barId)->first();
+
+        return $barPrice
+            ? (float) $barPrice->selling_price
+            : (float) $this->selling_price;
+    }
+
+    /**
+     * Markup percentage for a specific branch (selling vs cost).
+     */
+    public function getProfitPercentageForBranch(?int $barId): float
+    {
+        $cost = (float) ($this->average_unit_cost > 0 ? $this->average_unit_cost : $this->purchase_price);
+        if ($cost <= 0 || ! $barId) {
+            return 0;
+        }
+
+        $sellingPrice = $this->getSellingPriceForBranch($barId);
+        if (! $sellingPrice) {
+            return 0;
+        }
+
+        return (($sellingPrice - $cost) / $cost) * 100;
+    }
+
+    /**
+     * Min/max base-unit selling prices across all configured branches.
+     */
+    public function getSellingPriceRange(): array
+    {
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->with('barPrices')->first();
+
+        if (! $baseUnit) {
+            $price = (float) $this->selling_price;
+
+            return ['min' => $price, 'max' => $price, 'has_range' => false];
+        }
+
+        $prices = ($baseUnit->relationLoaded('barPrices') ? $baseUnit->barPrices : $baseUnit->barPrices()->get())
+            ->pluck('selling_price')
+            ->filter(fn ($p) => $p > 0)
+            ->map(fn ($p) => (float) $p);
+
+        if ($prices->isEmpty()) {
+            $price = (float) $this->selling_price;
+
+            return ['min' => $price, 'max' => $price, 'has_range' => false];
+        }
+
+        return [
+            'min' => $prices->min(),
+            'max' => $prices->max(),
+            'has_range' => $prices->min() !== $prices->max(),
+        ];
+    }
+
+    /**
+     * Unit cost used for profit calculations.
+     */
+    public function getUnitCost(): float
+    {
+        return (float) ($this->average_unit_cost > 0 ? $this->average_unit_cost : $this->purchase_price);
+    }
+
+    /**
+     * Get current stock value for a specific branch.
      */
     public function getStockValueForBranch($barId): float
     {
-        $baseUnit = $this->units()->where('is_base_unit', true)->first();
-        if (!$baseUnit) {
-            return $this->quantity * $this->selling_price;
-        }
-
-        $barPrice = $baseUnit->barPrices()->where('bar_id', $barId)->first();
-        $sellingPrice = $barPrice ? $barPrice->selling_price : $this->selling_price;
+        $sellingPrice = $this->getSellingPriceForBranch($barId) ?? $this->selling_price;
 
         return $this->quantity * $sellingPrice;
     }
@@ -213,21 +292,10 @@ class WarehouseStock extends Model
      */
     public function getPotentialProfitForBar($barId): float
     {
-        $totalPotentialProfit = 0;
-        
-        foreach ($this->units as $unit) {
-            $barPrice = $unit->barPrices()->where('bar_id', $barId)->first();
-            if ($barPrice) {
-                $totalPotentialProfit += ($barPrice->selling_price - $unit->purchase_price) * $this->quantity;
-            }
-        }
-        
-        // If no unit-specific prices, use default prices
-        if ($totalPotentialProfit == 0) {
-            $totalPotentialProfit = ($this->selling_price - $this->purchase_price) * $this->quantity;
-        }
-        
-        return $totalPotentialProfit;
+        $sellingPrice = $this->getSellingPriceForBranch($barId) ?? $this->selling_price;
+        $cost = $this->getUnitCost();
+
+        return ($sellingPrice - $cost) * $this->quantity;
     }
 
     /**

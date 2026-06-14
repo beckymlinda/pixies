@@ -4,258 +4,356 @@
 @php $pageTitle = 'Warehouse Stock'; @endphp
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
 <style>
-    .index-header {
+    .wh-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
-        padding: 1.5rem 2rem;
-        margin-bottom: 2rem;
+        margin: -1.5rem -1.5rem 1.5rem;
+        padding: 1.25rem 1.5rem;
     }
-    .data-card {
-        border-radius: 16px;
-        border: 1px solid rgba(226, 232, 240, 0.8);
+    .wh-card {
         background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
         overflow: hidden;
     }
-    .index-table th {
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #64748b;
-        background: #f8fafc;
-        padding: 14px 20px !important;
-        border-top: none !important;
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 0.75rem;
     }
-    .index-table td {
-        padding: 16px 20px !important;
-        vertical-align: middle !important;
-        font-size: 0.9rem;
-        color: #1e293b;
+    @media (min-width: 768px) {
+        .summary-grid { grid-template-columns: repeat(4, 1fr); }
     }
-    .btn-action {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.2s;
-        border: 1px solid #e2e8f0;
+    .summary-tile {
         background: white;
-        color: #64748b;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 0.85rem 1rem;
     }
-    .btn-action:hover {
+    .summary-tile .lbl {
+        font-size: 0.65rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #94a3b8;
+        font-weight: 600;
+    }
+    .summary-tile .val {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: #1e293b;
+        line-height: 1.3;
+    }
+    .filter-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: stretch;
+    }
+    .filter-bar .form-control,
+    .filter-bar .form-select {
+        border-radius: 10px;
+        font-size: 0.9rem;
+    }
+    .stock-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        background: white;
+        padding: 1rem;
+        margin-bottom: 0.75rem;
+        transition: box-shadow 0.15s;
+    }
+    .stock-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+    .stock-card.low-stock { border-left: 4px solid #ef4444; background: #fffbfb; }
+    .stock-card.expiring { border-left: 4px solid #f59e0b; background: #fffef7; }
+    .stock-card .item-name { font-size: 1rem; font-weight: 700; color: #1e293b; }
+    .stock-card .meta { font-size: 0.78rem; color: #64748b; }
+    .metric-pill {
         background: #f8fafc;
-        color: var(--pixies-primary);
-        border-color: var(--pixies-primary);
+        border-radius: 8px;
+        padding: 0.5rem 0.65rem;
+        text-align: center;
     }
-    .alert-badge {
-        font-size: 0.7rem;
-        padding: 4px 10px;
+    .metric-pill .lbl { font-size: 0.6rem; text-transform: uppercase; color: #94a3b8; font-weight: 600; }
+    .metric-pill .val { font-size: 0.9rem; font-weight: 700; color: #1e293b; }
+    .metric-pill .val.price { color: #2563eb; }
+    .metric-pill .val.profit { color: #059669; }
+    .metric-pill .val.loss { color: #dc2626; }
+    .status-badge {
+        font-size: 0.65rem;
+        padding: 3px 8px;
         border-radius: 20px;
         font-weight: 600;
     }
-    .low-stock-row {
-        background-color: #fef2f2 !important;
+    .action-row {
+        display: flex;
+        gap: 0.4rem;
+        flex-wrap: wrap;
+        margin-top: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid #f1f5f9;
     }
-    .expiring-soon-row {
-        background-color: #fffbeb !important;
+    .action-btn {
+        flex: 1;
+        min-width: 70px;
+        font-size: 0.75rem;
+        padding: 0.4rem 0.5rem;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        background: white;
+        color: #475569;
+        text-decoration: none;
+        text-align: center;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.25rem;
     }
-
-    @media (max-width: 768px) {
-        .index-header { flex-direction: column; align-items: flex-start !important; gap: 1rem; padding: 1rem; }
-        .index-table thead { display: none; }
-        .index-table tr { display: block; border-bottom: 1px solid #e2e8f0; padding: 15px; }
-        .index-table td { display: flex; justify-content: space-between; align-items: center; border: none !important; padding: 8px 0 !important; width: 100%; }
-        .index-table td::before { content: attr(data-label); font-weight: 700; font-size: 0.75rem; color: #64748b; text-transform: uppercase; }
-        .btn-action { width: auto; height: auto; padding: 6px 12px; border-radius: 20px; }
+    .action-btn:hover { background: #f8fafc; color: #1e293b; }
+    .action-btn.primary { background: #1e293b; color: white; border-color: #1e293b; }
+    .branch-context {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        border-radius: 10px;
+        padding: 0.6rem 0.85rem;
+        font-size: 0.82rem;
+        color: #1e40af;
     }
+    /* Desktop table */
+    .desktop-table { display: none; }
+    .mobile-cards { display: block; }
+    @media (min-width: 992px) {
+        .desktop-table { display: block; }
+        .mobile-cards { display: none; }
+    }
+    .desk-table th {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #64748b;
+        background: #f8fafc;
+        padding: 0.75rem 1rem;
+        border: none;
+    }
+    .desk-table td {
+        padding: 0.85rem 1rem;
+        vertical-align: middle;
+        font-size: 0.88rem;
+        border-bottom: 1px solid #f1f5f9;
+    }
+    .desk-table tr:hover td { background: #fafbfc; }
+    .desk-table tr.low-stock td { background: #fffbfb; }
+    .desk-table tr.expiring td { background: #fffef7; }
+    .tab-pills .btn { font-size: 0.8rem; }
 </style>
 
 <div class="container-fluid p-0">
-    <!-- Modern Header with Alerts -->
-    <div class="index-header shadow-sm">
-        <div class="d-flex align-items-center justify-content-between w-100 mb-3">
+    <div class="wh-header shadow-sm">
+        <div class="d-flex align-items-start justify-content-between flex-wrap gap-2 mb-3">
             <div>
-                <h1 class="h3 fw-bold mb-1 text-dark">Warehouse Stock</h1>
-                <p class="text-muted small mb-0">Manage inventory, track expiry dates, and monitor stock levels.</p>
+                <h1 class="h4 fw-bold mb-1">Warehouse Stock</h1>
+                <p class="text-muted small mb-0">Inventory overview with branch-specific pricing</p>
             </div>
-            <a href="{{ route('warehouse.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                <i class="bi bi-plus-lg me-2"></i>Add New Item
+            <a href="{{ route('warehouse.create') }}" class="btn btn-primary btn-sm rounded-pill px-3">
+                <i class="bi bi-plus-lg me-1"></i>Add Item
             </a>
         </div>
-
-        <!-- Alert Tabs -->
-        <div class="d-flex gap-2 flex-wrap">
-            <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary rounded-pill px-3 py-2 {{ !request()->has('tab') ? 'active' : '' }}">
-                <i class="bi bi-box-seam me-1"></i>All Items ({{ $totalItemsCount }})
-            </a>
-            <a href="{{ route('warehouse.alerts.expiry') }}" class="btn btn-outline-warning rounded-pill px-3 py-2">
-                <i class="bi bi-exclamation-triangle me-1"></i>Expiry Alert ({{ $expiryAlertsCount + $expiredCount }})
-            </a>
-            <a href="{{ route('warehouse.alerts.low-stock') }}" class="btn btn-outline-danger rounded-pill px-3 py-2">
-                <i class="bi bi-graph-down me-1"></i>Low Stock ({{ $lowStockCount }})
-            </a>
-            @php
-                $pendingTransferCount = \App\Models\WarehouseTransferRequest::where('status', 'pending')->count();
-            @endphp
-            <a href="{{ route('warehouse.transfer-requests') }}" class="btn btn-outline-primary rounded-pill px-3 py-2">
-                <i class="bi bi-arrow-left-right me-1"></i>Transfer Requests
-                @if($pendingTransferCount > 0)
-                    <span class="badge bg-warning text-dark ms-1">{{ $pendingTransferCount }}</span>
-                @endif
+        <div class="tab-pills d-flex gap-2 flex-wrap">
+            <a href="{{ route('warehouse.index') }}" class="btn btn-sm btn-outline-secondary rounded-pill">All ({{ $totalItemsCount }})</a>
+            <a href="{{ route('warehouse.alerts.expiry') }}" class="btn btn-sm btn-outline-warning rounded-pill">Expiry ({{ $expiryAlertsCount + $expiredCount }})</a>
+            <a href="{{ route('warehouse.alerts.low-stock') }}" class="btn btn-sm btn-outline-danger rounded-pill">Low Stock ({{ $lowStockCount }})</a>
+            @php $pendingTransferCount = \App\Models\WarehouseTransferRequest::where('status', 'pending')->count(); @endphp
+            <a href="{{ route('warehouse.transfer-requests') }}" class="btn btn-sm btn-outline-primary rounded-pill">
+                Transfers @if($pendingTransferCount > 0)<span class="badge bg-warning text-dark ms-1">{{ $pendingTransferCount }}</span>@endif
             </a>
         </div>
     </div>
 
-    <div class="px-4">
-        <!-- Search Bar -->
-        <div class="card data-card shadow-sm border-0 mb-3">
-            <div class="card-body p-3">
-                <form method="GET" action="{{ route('warehouse.index') }}" class="d-flex gap-2">
-                    <div class="flex-grow-1">
-                        <input type="text" name="search" value="{{ $search ?? '' }}" class="form-control" placeholder="Search items by name...">
-                    </div>
-                    <div style="min-width: 200px;">
-                        <select name="bar_id" class="form-select" onchange="this.form.submit()">
-                            <option value="">All Branches</option>
-                            @foreach($bars as $bar)
-                                <option value="{{ $bar->id }}" {{ $selectedBarId == $bar->id ? 'selected' : '' }}>{{ $bar->name }}</option>
-                            @endforeach
-                        </select>
-                    </div>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-search"></i>
-                    </button>
-                    @if($search ?? null || $selectedBarId ?? null)
-                        <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary">
-                            <i class="bi bi-x-lg"></i>
-                        </a>
-                    @endif
-                </form>
-            </div>
-        </div>
-
-        <!-- Summary Cards -->
-        <div class="row mb-3">
-            <div class="col-md-3">
-                <div class="card data-card shadow-sm border-0">
-                    <div class="card-body p-3">
-                        <div class="small text-muted text-uppercase fw-bold mb-1">Total Stock Cost</div>
-                        <div class="h4 fw-bold text-dark mb-0">MWK {{ number_format($totalStockCost, 2) }}</div>
-                    </div>
+    <div class="px-3 px-md-4 pb-4">
+        {{-- Filters --}}
+        <div class="wh-card p-3 mb-3">
+            <form method="GET" action="{{ route('warehouse.index') }}" class="filter-bar">
+                <input type="text" name="search" value="{{ $search ?? '' }}" class="form-control flex-grow-1" placeholder="Search items..." style="min-width:140px">
+                <select name="bar_id" class="form-select" style="min-width:160px;max-width:220px" onchange="this.form.submit()">
+                    <option value="">All Branches</option>
+                    @foreach($bars as $bar)
+                        <option value="{{ $bar->id }}" {{ (int)$selectedBarId === $bar->id ? 'selected' : '' }}>{{ $bar->name }}</option>
+                    @endforeach
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm px-3"><i class="bi bi-search"></i></button>
+                @if($search || $selectedBarId)
+                    <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x-lg"></i></a>
+                @endif
+            </form>
+            @if($selectedBar)
+                <div class="branch-context mt-2">
+                    <i class="bi bi-shop me-1"></i>Showing prices for <strong>{{ $selectedBar->name }}</strong>
                 </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card data-card shadow-sm border-0">
-                    <div class="card-body p-3">
-                        <div class="small text-muted text-uppercase fw-bold mb-1">Total Stock Value</div>
-                        <div class="h4 fw-bold text-primary mb-0">MWK {{ number_format($totalStockValue, 2) }}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card data-card shadow-sm border-0">
-                    <div class="card-body p-3">
-                        <div class="small text-muted text-uppercase fw-bold mb-1">Expected Profit</div>
-                        <div class="h4 fw-bold text-success mb-0">MWK {{ number_format($totalExpectedProfit, 2) }}</div>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="card data-card shadow-sm border-0">
-                    <div class="card-body p-3">
-                        <div class="small text-muted text-uppercase fw-bold mb-1">Low Stock Items</div>
-                        <div class="h4 fw-bold text-danger mb-0">{{ $lowStockCount }}</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Stock Table -->
-        <div class="card data-card shadow-sm border-0">
-            <div class="table-responsive">
-                <table class="table index-table mb-0">
-                    <thead>
-                        <tr>
-                            <th>Item Name</th>
-                            <th>Stock</th>
-                            <th>Cost Price</th>
-                            <th>Selling Price</th>
-                            <th>Profit %</th>
-                            <th>Status</th>
-                            <th class="text-end">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @forelse($stocks as $stock)
-                            <tr class="{{ $stock->isLowStock() ? 'low-stock-row' : '' }} {{ $stock->isExpiringsoon() ? 'expiring-soon-row' : '' }}">
-                                <td data-label="Item Name">
-                                    <div class="fw-bold text-dark">{{ $stock->item_name }}</div>
-                                </td>
-                                <td data-label="Stock">
-                                    <div class="fw-bold {{ $stock->isLowStock() ? 'text-danger' : 'text-dark' }}">{{ $stock->quantity }}</div>
-                                </td>
-                                <td data-label="Cost Price">
-                                    <div class="text-dark">MWK {{ number_format($stock->average_unit_cost > 0 ? $stock->average_unit_cost : $stock->purchase_price, 2) }}</div>
-                                </td>
-                                <td data-label="Selling Price">
-                                    <div class="text-primary fw-bold">MWK {{ number_format($stock->selling_price, 2) }}</div>
-                                </td>
-                                <td data-label="Profit %">
-                                    <div class="fw-bold {{ $stock->profit_percentage > 0 ? 'text-success' : 'text-danger' }}">
-                                        {{ number_format($stock->profit_percentage, 2) }}%
-                                    </div>
-                                </td>
-                                <td data-label="Status">
-                                    <span class="alert-badge {{ $stock->status_badge_class }}">{{ $stock->item_status }}</span>
-                                </td>
-                                <td data-label="Actions" class="text-end">
-                                    <a href="{{ route('warehouse.show', $stock) }}" class="btn-action" title="View">
-                                        <i class="bi bi-eye-fill"></i>
-                                    </a>
-                                    <a href="{{ route('warehouse.edit', $stock) }}" class="btn-action" title="Edit">
-                                        <i class="bi bi-pencil-fill"></i>
-                                    </a>
-                                    <a href="{{ route('warehouse.restock', $stock) }}" class="btn-action" title="Restock">
-                                        <i class="bi bi-plus-circle-fill"></i>
-                                    </a>
-                                    <form action="{{ route('warehouse.destroy', $stock) }}" method="POST" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this item?');">
-                                        @csrf
-                                        @method('DELETE')
-                                        <button type="submit" class="btn-action ms-1" title="Delete">
-                                            <i class="bi bi-trash-fill"></i>
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                        @empty
-                            <tr>
-                                <td colspan="7" class="text-center py-5">
-                                    <div class="opacity-25 display-4 mb-3">📦</div>
-                                    <p class="text-muted">No stock items found. Add your first item to get started.</p>
-                                </td>
-                            </tr>
-                        @endforelse
-                    </tbody>
-                </table>
-            </div>
-            
-            @if($stocks->hasPages())
-                <div class="card-footer bg-white border-top p-3">
-                    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
-                        <div class="small text-muted">
-                            Showing {{ $stocks->firstItem() }} to {{ $stocks->lastItem() }} of {{ $stocks->total() }} items
-                        </div>
-                        <div class="shadow-sm bg-white">
-                            {{ $stocks->appends(['search' => $search ?? null])->links() }}
-                        </div>
-                    </div>
+            @else
+                <div class="branch-context mt-2" style="background:#f8fafc;border-color:#e2e8f0;color:#64748b">
+                    <i class="bi bi-info-circle me-1"></i>Select a branch to see exact selling prices, or view price ranges below
                 </div>
             @endif
         </div>
+
+        {{-- Summary --}}
+        <div class="summary-grid mb-3">
+            <div class="summary-tile">
+                <div class="lbl">Stock Cost</div>
+                <div class="val">MWK {{ number_format($totalStockCost, 0) }}</div>
+            </div>
+            <div class="summary-tile">
+                <div class="lbl">{{ $selectedBar ? $selectedBar->name . ' Value' : 'Total Value' }}</div>
+                <div class="val text-primary">MWK {{ number_format($totalStockValue, 0) }}</div>
+            </div>
+            <div class="summary-tile">
+                <div class="lbl">Expected Profit</div>
+                <div class="val text-success">MWK {{ number_format($totalExpectedProfit, 0) }}</div>
+            </div>
+            <div class="summary-tile">
+                <div class="lbl">Low Stock</div>
+                <div class="val text-danger">{{ $lowStockCount }}</div>
+            </div>
+        </div>
+
+        @if($stocks->isEmpty())
+            <div class="wh-card text-center py-5">
+                <div class="opacity-25 display-4 mb-2">📦</div>
+                <p class="text-muted mb-0">No items found.</p>
+            </div>
+        @else
+        <div class="mobile-cards">
+        @foreach($stocks as $stock)
+            @php
+                $baseUnit = $stock->units->firstWhere('is_base_unit', true);
+                $unitCost = $stock->getUnitCost();
+                if ($selectedBarId) {
+                    $sellPrice = $stock->getSellingPriceForBranch((int) $selectedBarId);
+                    $profitPct = $stock->getProfitPercentageForBranch((int) $selectedBarId);
+                    $priceLabel = 'MWK ' . number_format($sellPrice ?? 0, 0);
+                } else {
+                    $range = $stock->getSellingPriceRange();
+                    $priceLabel = $range['has_range']
+                        ? 'MWK ' . number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
+                        : 'MWK ' . number_format($range['min'], 0);
+                    $profitPct = $unitCost > 0 ? (($range['min'] - $unitCost) / $unitCost) * 100 : 0;
+                    $sellPrice = null;
+                }
+                $rowClass = $stock->isLowStock() ? 'low-stock' : ($stock->isExpiringsoon() ? 'expiring' : '');
+            @endphp
+                <div class="stock-card {{ $rowClass }}">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                            <div class="item-name">{{ $stock->item_name }}</div>
+                            <div class="meta">{{ $baseUnit?->unit_name ?? 'units' }} · bought as {{ $stock->purchase_unit ?? '—' }}</div>
+                        </div>
+                        <span class="status-badge {{ $stock->status_badge_class }}">{{ $stock->item_status }}</span>
+                    </div>
+                    <div class="row g-2">
+                        <div class="col-4">
+                            <div class="metric-pill">
+                                <div class="lbl">Stock</div>
+                                <div class="val {{ $stock->isLowStock() ? 'loss' : '' }}">{{ number_format($stock->quantity) }}</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="metric-pill">
+                                <div class="lbl">Cost</div>
+                                <div class="val">{{ number_format($unitCost, 0) }}</div>
+                            </div>
+                        </div>
+                        <div class="col-4">
+                            <div class="metric-pill">
+                                <div class="lbl">{{ $selectedBar ? 'Sell' : 'Price' }}</div>
+                                <div class="val price" style="font-size:0.78rem">{{ $priceLabel }}</div>
+                            </div>
+                        </div>
+                    </div>
+                    @if($selectedBarId && $sellPrice)
+                        <div class="small mt-2 {{ $profitPct >= 0 ? 'text-success' : 'text-danger' }}">
+                            {{ number_format($profitPct, 0) }}% markup at {{ $selectedBar->name }}
+                        </div>
+                    @endif
+                    <div class="action-row">
+                        <a href="{{ route('warehouse.show', $stock) }}" class="action-btn primary"><i class="bi bi-eye"></i> View</a>
+                        <a href="{{ route('warehouse.edit', $stock) }}" class="action-btn"><i class="bi bi-pencil"></i> Edit</a>
+                        <a href="{{ route('warehouse.restock', $stock) }}" class="action-btn"><i class="bi bi-plus-circle"></i> Restock</a>
+                    </div>
+                </div>
+        @endforeach
+        </div>
+
+        {{-- Desktop table (single loop, rendered inside table) --}}
+        <div class="desktop-table">
+            <div class="wh-card">
+                <div class="table-responsive">
+                    <table class="table desk-table mb-0">
+                        <thead>
+                            <tr>
+                                <th>Item</th>
+                                <th>Stock</th>
+                                <th>Unit</th>
+                                <th class="text-end">Cost</th>
+                                <th class="text-end">{{ $selectedBar ? 'Sell (' . $selectedBar->name . ')' : 'Sell Price' }}</th>
+                                <th class="text-end">Markup</th>
+                                <th>Status</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @forelse($stocks as $stock)
+                                @php
+                                    $baseUnit = $stock->units->firstWhere('is_base_unit', true);
+                                    $unitCost = $stock->getUnitCost();
+                                    if ($selectedBarId) {
+                                        $sellPrice = $stock->getSellingPriceForBranch((int) $selectedBarId);
+                                        $profitPct = $stock->getProfitPercentageForBranch((int) $selectedBarId);
+                                        $priceLabel = number_format($sellPrice ?? 0, 0);
+                                    } else {
+                                        $range = $stock->getSellingPriceRange();
+                                        $priceLabel = $range['has_range']
+                                            ? number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
+                                            : number_format($range['min'], 0);
+                                        $profitPct = null;
+                                    }
+                                    $rowClass = $stock->isLowStock() ? 'low-stock' : ($stock->isExpiringsoon() ? 'expiring' : '');
+                                @endphp
+                                <tr class="{{ $rowClass }}">
+                                    <td>
+                                        <div class="fw-bold">{{ $stock->item_name }}</div>
+                                        <div class="small text-muted">Bought as {{ $stock->purchase_unit ?? '—' }}</div>
+                                    </td>
+                                    <td class="fw-semibold {{ $stock->isLowStock() ? 'text-danger' : '' }}">{{ number_format($stock->quantity) }}</td>
+                                    <td>{{ $baseUnit?->unit_name ?? '—' }}</td>
+                                    <td class="text-end">MWK {{ number_format($unitCost, 0) }}</td>
+                                    <td class="text-end fw-semibold text-primary">MWK {{ $priceLabel }}</td>
+                                    <td class="text-end {{ $profitPct !== null ? ($profitPct >= 0 ? 'text-success' : 'text-danger') : 'text-muted' }}">
+                                        {{ $profitPct !== null ? number_format($profitPct, 0) . '%' : '—' }}
+                                    </td>
+                                    <td><span class="status-badge {{ $stock->status_badge_class }}">{{ $stock->item_status }}</span></td>
+                                    <td class="text-end text-nowrap">
+                                        <a href="{{ route('warehouse.show', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-eye"></i></a>
+                                        <a href="{{ route('warehouse.edit', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-pencil"></i></a>
+                                        <a href="{{ route('warehouse.restock', $stock) }}" class="btn btn-sm btn-outline-primary py-0 px-2"><i class="bi bi-plus-circle"></i></a>
+                                    </td>
+                                </tr>
+                            @empty
+                                <tr><td colspan="8" class="text-center py-5 text-muted">No items found.</td></tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        @endif
+
+        @if($stocks->hasPages())
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
+                <div class="small text-muted">
+                    {{ $stocks->firstItem() }}–{{ $stocks->lastItem() }} of {{ $stocks->total() }}
+                </div>
+                {{ $stocks->appends(['search' => $search ?? null, 'bar_id' => $selectedBarId])->links() }}
+            </div>
+        @endif
     </div>
 </div>
 @endsection

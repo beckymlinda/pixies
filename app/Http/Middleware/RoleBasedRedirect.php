@@ -27,8 +27,11 @@ class RoleBasedRedirect
                     return redirect()->route('manager.dashboard');
                 case 'director':
                     return redirect()->route('director.dashboard');
+                case null:
+                case '':
+                    return redirect()->route('account.pending');
                 default:
-                    return redirect()->route('dashboard');
+                    abort(403, 'Your account role is not recognized. Contact an administrator.');
             }
         }
         

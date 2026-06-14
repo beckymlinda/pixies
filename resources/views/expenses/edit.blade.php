@@ -70,10 +70,9 @@
                                     <label class="form-label fw-bold text-dark">Expense Type</label>
                                     <select name="type" class="form-select form-control-modern" required>
                                         <option value="">Select Type</option>
-                                        <option value="Debt" {{ $expense->type === 'Debt' ? 'selected' : '' }}>💸 Debt Repayment</option>
-                                        <option value="Lunch" {{ $expense->type === 'Lunch' ? 'selected' : '' }}>🍽 Staff Lunch</option>
-                                        <option value="Stock" {{ $expense->type === 'Stock' ? 'selected' : '' }}>📦 Emergency Stock</option>
-                                        <option value="Other" {{ $expense->type === 'Other' ? 'selected' : '' }}>⚙️ Other Operating Cost</option>
+                                        @foreach(\App\Models\Expense::operationalTypes() as $value => $label)
+                                            <option value="{{ $value }}" {{ $expense->type === $value ? 'selected' : '' }}>{{ $label }}</option>
+                                        @endforeach
                                     </select>
                                 </div>
                                 
@@ -89,7 +88,7 @@
                                 <div class="col-12">
                                     <label class="form-label fw-bold text-dark">Description</label>
                                     <textarea name="description" class="form-control form-control-modern" rows="3" 
-                                              placeholder="Provide details about this expense..." required>{{ $expense->description }}</textarea>
+                                              placeholder="Provide details about this expense...">{{ $expense->description }}</textarea>
                                 </div>
 
                                 <div class="col-12">

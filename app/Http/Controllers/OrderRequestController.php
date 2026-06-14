@@ -22,17 +22,16 @@ class OrderRequestController extends Controller
             abort(403, 'Only sellers can access this page.');
         }
 
-        // Fetch requests for this seller's bar
-        $requests = OrderRequest::where('bar_id', $user->bar_id)
-            ->with(['items.item', 'user'])
-            ->orderBy('created_at', 'desc')
-            ->paginate(10);
-
-        // Mark processed requests as notified/seen by seller
+        // Mark processed requests as seen before loading so badges clear immediately
         OrderRequest::where('bar_id', $user->bar_id)
             ->where('status', '!=', 'pending')
             ->where('seller_notified', false)
             ->update(['seller_notified' => true]);
+
+        $requests = OrderRequest::where('bar_id', $user->bar_id)
+            ->with(['items.item', 'user'])
+            ->orderBy('created_at', 'desc')
+            ->paginate(10);
 
         return view('seller.orders.index', compact('requests'));
     }
@@ -123,6 +122,8 @@ class OrderRequestController extends Controller
 
         $statusFilter = $request->get('status', 'all');
 
+        OrderRequest::markDirectorPendingAsSeen();
+
         $query = OrderRequest::with(['user', 'bar', 'items.item']);
 
         if ($statusFilter !== 'all') {
@@ -149,6 +150,8 @@ class OrderRequestController extends Controller
         }
 
         $orderRequest->load(['user', 'bar', 'items.item']);
+
+        OrderRequest::markDirectorPendingAsSeen([$orderRequest->id]);
 
         return view('director.orders.show', compact('orderRequest'));
     }
@@ -188,6 +191,9 @@ class OrderRequestController extends Controller
                     'notes' => $request->notes ?? $orderRequest->notes,
                     'seller_notified' => false,
                 ]);
+
+                $seenIds = array_values(array_diff(session('director_seen_order_ids', []), [$orderRequest->id]));
+                session(['director_seen_order_ids' => $seenIds]);
 
                 DB::commit();
                 return redirect()->route('director.orders.show', $orderRequest)

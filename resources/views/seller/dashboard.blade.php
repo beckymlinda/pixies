@@ -75,6 +75,11 @@
 </style>
 
 <div class="container-fluid px-4 py-4">
+    @if(!empty($noBarAssigned))
+        <div class="alert alert-warning border-0 shadow-sm rounded-4 mb-4">
+            <strong>No bar assigned.</strong> Your account is not linked to a branch. Please contact your manager to assign you to a bar.
+        </div>
+    @endif
     <!-- Welcome Header -->
     <div class="card welcome-card mb-4 shadow-lg">
         <div class="card-body p-4 p-md-5">
@@ -109,13 +114,19 @@
             <div class="card h-100 action-card shadow-sm">
                 <div class="card-body p-4">
                     <div class="icon-box bg-primary bg-opacity-10 text-primary">
-                        <i class="bi bi-pencil-square"></i>
+                        <i class="bi bi-cart-check"></i>
                     </div>
-                    <h3 class="h5 fw-bold mb-2">Daily Inventory</h3>
-                    <p class="text-muted small mb-4">Record opening stock, daily orders, and closing stock for today.</p>
-                    <a href="{{ route('stock-entries.create') }}" class="btn btn-primary w-100 rounded-pill py-2">
-                        <i class="bi bi-plus-lg me-2"></i>Create New Entry
-                    </a>
+                    <h3 class="h5 fw-bold mb-2">Sell</h3>
+                    <p class="text-muted small mb-4">Record opening stock, sales, and closing stock for today.</p>
+                    @if($todayEntry ?? null)
+                        <a href="{{ route('stock-entries.edit', $todayEntry) }}" class="btn btn-primary w-100 rounded-pill py-2">
+                            <i class="bi bi-play-fill me-2"></i>Continue Selling
+                        </a>
+                    @else
+                        <a href="{{ route('stock-entries.create') }}" class="btn btn-primary w-100 rounded-pill py-2">
+                            <i class="bi bi-plus-lg me-2"></i>Start Selling
+                        </a>
+                    @endif
                 </div>
             </div>
         </div>
@@ -124,18 +135,12 @@
             <div class="card h-100 action-card shadow-sm">
                 <div class="card-body p-4">
                     <div class="icon-box bg-slate-100 text-slate-800">
-                        <i class="bi bi-receipt"></i>
+                        <i class="bi bi-clipboard-check"></i>
                     </div>
-                    <h3 class="h5 fw-bold mb-2">Expenses</h3>
-                    <p class="text-muted small mb-2">Track daily petty cash and bar operational costs.</p>
-                    <div class="mb-3">
-                        <div class="d-flex justify-content-between small mb-1">
-                            <span class="text-muted">This Week</span>
-                            <span class="fw-bold">MWK {{ number_format($weeklyExpenses ?? 0) }}</span>
-                        </div>
-                    </div>
-                    <a href="{{ route('expenses.index') }}" class="btn btn-outline-secondary w-100 rounded-pill py-2">
-                        Manage Expenses
+                    <h3 class="h5 fw-bold mb-2">Shift Report</h3>
+                    <p class="text-muted small mb-2">Record payments, expenditure, and close your shift.</p>
+                    <a href="{{ route('reporting.index') }}" class="btn btn-outline-secondary w-100 rounded-pill py-2">
+                        Open Shift Report
                     </a>
                 </div>
             </div>
@@ -250,9 +255,6 @@
     </div>
         </div>
 
-        <!-- Right Column: Sidebar -->
-        <div class="col-lg-3">
-            @include('components.sidebar-quick-links')
-        </div>
+         
     </div>
 @endsection

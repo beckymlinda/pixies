@@ -64,7 +64,10 @@
                         {{ number_format(abs($missingMoney), 0) }}
                     </div>
                     <small class="text-muted">
-                        Collected - ((Sales - Credit) + Old Debt Collected)
+                        Collected − (Sales − Credit − Operating Expenses)
+                        @if(isset($expectedCollected))
+                            <br><span class="text-dark">Expected in till: {{ number_format($expectedCollected, 0) }}</span>
+                        @endif
                     </small>
                 </div>
             </div>

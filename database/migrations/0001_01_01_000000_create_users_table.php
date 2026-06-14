@@ -17,8 +17,8 @@ return new class extends Migration
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
-            $table->enum('role', ['seller', 'manager', 'director'])->default('seller');
-            $table->foreignId('bar_id')->nullable()->constrained()->onDelete('cascade');
+            $table->string('role', 50)->nullable();
+            $table->unsignedBigInteger('bar_id')->nullable();
             $table->rememberToken();
             $table->timestamps();
         });

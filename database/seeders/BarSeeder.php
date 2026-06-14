@@ -14,7 +14,6 @@ class BarSeeder extends Seeder
     public function run(): void
     {
         $bars = [
-            ['name' => 'Pixies Njerwa'],
             ['name' => 'Pixies Bar B'],
             ['name' => 'Pixies Liquor Shop'],
         ];

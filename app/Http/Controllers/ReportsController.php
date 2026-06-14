@@ -156,20 +156,26 @@ class ReportsController extends Controller
             })->sum('amount');
 
         // Business rule: bankable is visible collected money after expenses.
-        $bankableBalance = $totalCollected - $totalExpenses;
+        $debtCollections = DailyReportPayment::whereHas('dailyReport', function ($query) use ($startDate, $endDate) {
+            $query->whereBetween('date', [$startDate, $endDate]);
+        })->where('payment_method', 'Debt Collection')
+            ->when($barId, fn ($q) => $q->whereHas('dailyReport', fn ($dq) => $dq->where('bar_id', $barId)))
+            ->sum('amount');
 
-        // Reconciliation target from sales records:
-        // expected collected before expenses = total sales - credit sales.
-        $expectedCollected = $totalSales - $creditSales;
-        // Signed variance:
-        //  > 0 : surplus/over-recorded collection
-        //  < 0 : missing/under-recorded collection
-        $missingMoney = $totalCollected - $expectedCollected;
+        $reconciliation = $this->shiftCollectionMath(
+            (float) $totalSales,
+            (float) $creditSales,
+            (float) $totalCollected,
+            (float) $totalExpenses,
+            (float) $debtCollections
+        );
+        $expectedCollected = $reconciliation['expectedCollected'];
+        $missingMoney = $reconciliation['missingMoney'];
+        $bankableBalance = $reconciliation['bankableBalance'];
 
-        // VALIDATION: Ensure financial accuracy
-        // Collected + Credit + Missing should equal Total Sales
-        $validationCheck = ($expectedCollected + $creditSales);
-        $isAccurate = abs($validationCheck - $totalSales) < 0.01; // Allow for floating point
+        // Sales should equal collected + credit + operating expenses (minus debt repayments counted in collected).
+        $validationCheck = $totalCollected + $creditSales + $totalExpenses - $debtCollections;
+        $isAccurate = abs($validationCheck - $totalSales) < 0.01;
 
         return [
             'totalSales' => $totalSales,
@@ -516,6 +522,10 @@ class ReportsController extends Controller
             ->sum('balance');
 
         $paymentMethods = DailyReportPayment::getPaymentMethods();
+        $expenditureTypes = Expense::expenditureTypes();
+        $shiftExpenditures = $this->getShiftExpenditures($user, $today, $stockEntry);
+        $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
+        $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
 
         return view('reporting.create', compact(
             'existingReport',
@@ -523,8 +533,11 @@ class ReportsController extends Controller
             'totalSales',
             'totalExpenses',
             'creditSales',
+            'baseCreditSales',
             'expenses',
-            'paymentMethods'
+            'paymentMethods',
+            'expenditureTypes',
+            'shiftExpenditures'
         ));
     }
 
@@ -543,14 +556,24 @@ class ReportsController extends Controller
         $validated = $request->validate([
             'cash_in_hand' => 'required|numeric|min:0',
             'payments' => 'required|array|min:1',
-            'payments.*.payment_method' => 'required|in:MO,Airtel Money,Mpamba,Cash',
+            'payments.*.payment_method' => 'required|in:' . DailyReportPayment::paymentMethodKeys(),
             'payments.*.amount' => 'required|numeric|min:0',
             'payments.*.description' => 'nullable|string|max:255',
+            'expenditures' => 'nullable|array',
+            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::expenditureTypes())),
+            'expenditures.*.amount' => 'nullable|numeric|min:0',
+            'expenditures.*.notes' => 'nullable|string|max:500',
             'notes' => 'nullable|string|max:1000',
         ]);
 
         try {
             DB::beginTransaction();
+
+            $today = now()->format('Y-m-d');
+            $stockEntry = DailyStockEntry::where('date', $today)
+                ->where('bar_id', $user->bar_id)
+                ->orderBy('updated_at', 'desc')
+                ->first();
 
             // Calculate total payments
             $totalPayments = collect($validated['payments'])->sum('amount');
@@ -560,7 +583,7 @@ class ReportsController extends Controller
                 [
                     'user_id' => $user->id,
                     'bar_id' => $user->bar_id,
-                    'date' => now()->format('Y-m-d'),
+                    'date' => $today,
                 ],
                 [
                     'cash_in_hand' => $validated['cash_in_hand'],
@@ -582,6 +605,8 @@ class ReportsController extends Controller
                     'description' => $payment['description'] ?? null,
                 ]);
             }
+
+            $this->syncShiftExpenditures($request, $user, $stockEntry);
 
             DB::commit();
 
@@ -653,7 +678,7 @@ class ReportsController extends Controller
         // COLLECTION: Collected Money ONLY from payments table
         // Cash is stored in daily_reports.cash_in_hand
         $cashPayments = $dailyReport->cash_in_hand;
-        $mobilePayments = $dailyReport->payments()->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO'])->sum('amount');
+        $mobilePayments = $dailyReport->payments()->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO626', 'MO', 'POS'])->sum('amount');
         $debtCollections = $dailyReport->payments()->where('payment_method', 'Debt Collection')->sum('amount');
         
         // "Collected" includes cash + mobile + debt collections.
@@ -667,21 +692,22 @@ class ReportsController extends Controller
             ->where('status', '!=', 'paid')
             ->sum('balance');
         
-        // EXPENSES
+        // EXPENSES (operational only — debt is tracked as credit sales)
         $totalExpenses = $expenses->sum('amount');
-        
-        // Business rule: bankable is visible collected money after expenses.
-        $bankableBalance = $totalCollected - $totalExpenses;
 
-        // Reconciliation against expected collected from sales.
-        // Expected = (Today's Sales - New Credit) + Old Debt Collected
-        $expectedCollected = ($totalSales - $creditSales) + $debtCollections;
-        $missingMoney = $totalCollected - $expectedCollected;
-        
-        // VALIDATION: Ensure financial accuracy
-        // Collected + Credit + Missing should equal Total Sales
-        $validationCheck = ($expectedCollected + $creditSales);
-        $isAccurate = abs($validationCheck - $totalSales) < 0.01; // Allow for floating point
+        $reconciliation = $this->shiftCollectionMath(
+            (float) $totalSales,
+            (float) $creditSales,
+            (float) $totalCollected,
+            (float) $totalExpenses,
+            (float) $debtCollections
+        );
+        $bankableBalance = $reconciliation['bankableBalance'];
+        $expectedCollected = $reconciliation['expectedCollected'];
+        $missingMoney = $reconciliation['missingMoney'];
+
+        $validationCheck = $totalCollected + $creditSales + $totalExpenses - $debtCollections;
+        $isAccurate = abs($validationCheck - $totalSales) < 0.01;
         
         // Calculate payments by method for the table
         $allRegisteredPayments = $dailyReport->cash_in_hand + $dailyReport->payments()->sum('amount');
@@ -777,7 +803,7 @@ class ReportsController extends Controller
         // COLLECTION: Collected Money ONLY from payments table
         // Try multiple variations for cash payments
         $cashPayments = $dailyReport->cash_in_hand;
-        $mobilePayments = $dailyReport->payments()->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO'])->sum('amount');
+        $mobilePayments = $dailyReport->payments()->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO626', 'MO', 'POS'])->sum('amount');
         $totalCollected = $cashPayments + $mobilePayments;
         
         // CREDIT: Credit Sales ONLY from unpaid tabs
@@ -788,13 +814,28 @@ class ReportsController extends Controller
         
         // EXPENSES
         $totalExpenses = $expenses->sum('amount');
-        
-        // Bankable and reconciliation for edit view.
-        $bankableBalance = $totalCollected - $totalExpenses;
-        $expectedCollected = $totalSales - $creditSales;
-        $missingMoney = $totalCollected - $expectedCollected;
+
+        $debtCollections = $dailyReport->payments()->where('payment_method', 'Debt Collection')->sum('amount');
+        $reconciliation = $this->shiftCollectionMath(
+            (float) $totalSales,
+            (float) $creditSales,
+            (float) $totalCollected,
+            (float) $totalExpenses,
+            (float) $debtCollections
+        );
+        $bankableBalance = $reconciliation['bankableBalance'];
+        $expectedCollected = $reconciliation['expectedCollected'];
+        $missingMoney = $reconciliation['missingMoney'];
         
         $paymentMethods = DailyReportPayment::getPaymentMethods();
+        $expenditureTypes = Expense::expenditureTypes();
+        $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+            ->where('bar_id', $dailyReport->bar_id)
+            ->orderBy('updated_at', 'desc')
+            ->first();
+        $shiftExpenditures = $this->getShiftExpenditures($user, $dailyReport->date->format('Y-m-d'), $stockEntry);
+        $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
+        $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
 
         return view('reporting.edit', compact(
             'dailyReport', 
@@ -806,8 +847,11 @@ class ReportsController extends Controller
             'mobilePayments',
             'totalCollected',
             'creditSales',
+            'baseCreditSales',
             'missingMoney',
-            'bankableBalance'
+            'bankableBalance',
+            'expenditureTypes',
+            'shiftExpenditures'
         ));
     }
 
@@ -831,14 +875,23 @@ class ReportsController extends Controller
         $validated = $request->validate([
             'cash_in_hand' => 'required|numeric|min:0',
             'payments' => 'required|array|min:1',
-            'payments.*.payment_method' => 'required|in:MO,Airtel Money,Mpamba,Cash',
+            'payments.*.payment_method' => 'required|in:' . DailyReportPayment::paymentMethodKeys(),
             'payments.*.amount' => 'required|numeric|min:0',
             'payments.*.description' => 'nullable|string|max:255',
+            'expenditures' => 'nullable|array',
+            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::expenditureTypes())),
+            'expenditures.*.amount' => 'nullable|numeric|min:0',
+            'expenditures.*.notes' => 'nullable|string|max:500',
             'notes' => 'nullable|string|max:1000',
         ]);
 
         try {
             DB::beginTransaction();
+
+            $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+                ->where('bar_id', $dailyReport->bar_id)
+                ->orderBy('updated_at', 'desc')
+                ->first();
 
             // Calculate total payments
             $totalPayments = collect($validated['payments'])->sum('amount');
@@ -862,6 +915,8 @@ class ReportsController extends Controller
                     'description' => $payment['description'] ?? null,
                 ]);
             }
+
+            $this->syncShiftExpenditures($request, $user, $stockEntry, $dailyReport->date->format('Y-m-d'));
 
             DB::commit();
 
@@ -913,5 +968,120 @@ class ReportsController extends Controller
             return back()
                 ->with('error', 'Error deleting daily report: ' . $e->getMessage());
         }
+    }
+
+    private function getShiftExpenditures(User $user, string $date, ?DailyStockEntry $stockEntry): array
+    {
+        $items = [];
+
+        $expenseQuery = Expense::where('date', $date);
+        if ($user->isSeller()) {
+            $expenseQuery->where('user_id', $user->id);
+        } elseif ($stockEntry) {
+            $expenseQuery->where(function ($query) use ($stockEntry, $user) {
+                $query->where('stock_entry_id', $stockEntry->id)
+                    ->orWhere('user_id', $user->id);
+            });
+        }
+
+        foreach ($expenseQuery->get() as $expense) {
+            $items[] = [
+                'type' => $expense->type,
+                'amount' => $expense->amount,
+                'notes' => $expense->description ?? '',
+            ];
+        }
+
+        $debtQuery = CustomerTab::whereDate('date', $date)
+            ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%');
+
+        if ($user->bar_id) {
+            $debtQuery->where('bar_id', $user->bar_id);
+        }
+        if ($user->isSeller()) {
+            $debtQuery->where('created_by', $user->id);
+        }
+
+        foreach ($debtQuery->get() as $tab) {
+            $items[] = [
+                'type' => 'debt',
+                'amount' => $tab->amount,
+                'notes' => $tab->customer_name,
+            ];
+        }
+
+        return $items;
+    }
+
+    private function syncShiftExpenditures(Request $request, User $user, ?DailyStockEntry $stockEntry, ?string $date = null): void
+    {
+        $date = $date ?? now()->format('Y-m-d');
+        $barId = $user->bar_id;
+        $expenditures = $request->input('expenditures', []);
+
+        Expense::where('user_id', $user->id)->where('date', $date)->delete();
+
+        if ($barId) {
+            CustomerTab::where('bar_id', $barId)
+                ->whereDate('date', $date)
+                ->where('created_by', $user->id)
+                ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+                ->delete();
+        }
+
+        foreach ($expenditures as $row) {
+            $amount = (float) ($row['amount'] ?? 0);
+            if ($amount <= 0) {
+                continue;
+            }
+
+            $type = $row['type'] ?? '';
+            $notes = trim($row['notes'] ?? '');
+
+            if ($type === 'debt' && $barId) {
+                $customerName = $notes ?: 'Credit Customer';
+                CustomerTab::create([
+                    'customer_name' => $customerName,
+                    'phone' => null,
+                    'bar_id' => $barId,
+                    'date' => $date,
+                    'amount' => $amount,
+                    'paid_amount' => 0,
+                    'balance' => $amount,
+                    'status' => 'open',
+                    'description' => Expense::SHIFT_DEBT_PREFIX . ' ' . $notes,
+                    'created_by' => $user->id,
+                ]);
+            } elseif (array_key_exists($type, Expense::operationalTypes())) {
+                Expense::create([
+                    'stock_entry_id' => $stockEntry?->id,
+                    'type' => $type,
+                    'amount' => $amount,
+                    'description' => $notes ?: null,
+                    'date' => $date,
+                    'user_id' => $user->id,
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Shift till reconciliation: operational spend reduces what should remain in the drawer.
+     */
+    private function shiftCollectionMath(
+        float $totalSales,
+        float $creditSales,
+        float $totalCollected,
+        float $operationalExpenses,
+        float $debtCollections = 0
+    ): array {
+        $expectedCollected = ($totalSales - $creditSales - $operationalExpenses) + $debtCollections;
+        $missingMoney = $totalCollected - $expectedCollected;
+
+        return [
+            'expectedCollected' => $expectedCollected,
+            'missingMoney' => $missingMoney,
+            'bankableBalance' => $totalCollected - $operationalExpenses,
+        ];
     }
 }

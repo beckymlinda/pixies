@@ -84,9 +84,11 @@
             </div>
         </div>
         <div class="d-flex gap-2">
-            <a href="{{ route('expenses.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                <i class="bi bi-plus-lg me-2"></i>Record New
-            </a>
+            @if(!auth()->user()->isSeller())
+                <a href="{{ route('expenses.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                    <i class="bi bi-plus-lg me-2"></i>Record New
+                </a>
+            @endif
         </div>
     </div>
 
@@ -98,7 +100,7 @@
                     <div class="stat-icon bg-danger bg-opacity-10 text-danger">
                         <i class="bi bi-cash-stack"></i>
                     </div>
-                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Total Spent</div>
+                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Total Spent / Credit</div>
                     <div class="h3 mb-0 fw-bold text-dark">
                         <span class="small fs-6 opacity-50">MWK</span> {{ number_format($totalAmount) }}
                     </div>
@@ -126,7 +128,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse($expenses as $expense)
+                        @foreach($expenses as $expense)
                             <tr>
                                 @if(!auth()->user()->isSeller())
                                     <td data-label="Seller">
@@ -136,7 +138,7 @@
                                 @endif
                                 <td data-label="Category">
                                     <span class="badge bg-light text-dark border border-secondary border-opacity-10 px-3 py-2 rounded-pill">
-                                        {{ $expense->type }}
+                                        {{ \App\Models\Expense::typeLabel($expense->type) }}
                                     </span>
                                 </td>
                                 <td data-label="Details">
@@ -153,7 +155,7 @@
                                         <a href="{{ route('expenses.show', $expense) }}" class="btn-action shadow-sm" title="View">
                                             <i class="bi bi-eye-fill"></i>
                                         </a>
-                                        @if(auth()->user()->isManager() || auth()->user()->isDirector() || (auth()->user()->isSeller() && $expense->user_id === auth()->id()))
+                                        @if(auth()->user()->isManager() || auth()->user()->isDirector())
                                             <a href="{{ route('expenses.edit', $expense) }}" class="btn-action shadow-sm" title="Edit">
                                                 <i class="bi bi-pencil-fill"></i>
                                             </a>
@@ -168,14 +170,42 @@
                                     </div>
                                 </td>
                             </tr>
-                        @empty
+                        @endforeach
+                        @foreach($debtEntries as $debt)
+                            <tr>
+                                @if(!auth()->user()->isSeller())
+                                    <td data-label="Seller">
+                                        <div class="fw-semibold text-dark">Shift Report</div>
+                                        <div class="small text-muted">Credit sale</div>
+                                    </td>
+                                @endif
+                                <td data-label="Category">
+                                    <span class="badge bg-purple bg-opacity-10 text-purple border px-3 py-2 rounded-pill">
+                                        Debt (Credit Sale)
+                                    </span>
+                                </td>
+                                <td data-label="Details">
+                                    <div class="text-secondary small">{{ $debt->customer_name ?: 'No customer name' }}</div>
+                                </td>
+                                <td data-label="Time">
+                                    <div class="text-muted small">{{ $debt->created_at->format('h:i A') }}</div>
+                                </td>
+                                <td data-label="Amount" class="text-end fw-bold text-dark">
+                                    MWK {{ number_format($debt->amount) }}
+                                </td>
+                                <td data-label="Actions" class="text-end">
+                                    <span class="small text-muted">Via shift report</span>
+                                </td>
+                            </tr>
+                        @endforeach
+                        @if($expenses->isEmpty() && $debtEntries->isEmpty())
                             <tr>
                                 <td colspan="6" class="text-center py-5">
                                     <div class="opacity-25 display-4 mb-3">🧾</div>
-                                    <p class="text-muted">No specific records found for this date.</p>
+                                    <p class="text-muted">No records for this date. Add expenditure in your shift report.</p>
                                 </td>
                             </tr>
-                        @endforelse
+                        @endif
                     </tbody>
                 </table>
             </div>

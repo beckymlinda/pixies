@@ -33,13 +33,18 @@ class StockEntryController extends Controller
                 ->with(['bar', 'stockEntryItems.item'])
                 ->orderBy('date', 'desc')
                 ->paginate(10);
+
+            $todayEntry = DailyStockEntry::where('bar_id', $user->bar_id)
+                ->whereDate('date', now()->toDateString())
+                ->first();
         } else {
             $entries = DailyStockEntry::with(['bar', 'user', 'stockEntryItems.item'])
                 ->orderBy('date', 'desc')
                 ->paginate(10);
+            $todayEntry = null;
         }
 
-        return view('stock-entries.index', compact('entries'));
+        return view('stock-entries.index', compact('entries', 'todayEntry'));
     }
 
     public function create()
@@ -57,15 +62,8 @@ class StockEntryController extends Controller
             ->first();
 
         if ($existingEntry) {
-            // If existing entry has items, show it
-            if ($existingEntry->stockEntryItems()->count() > 0) {
-                return redirect()->route('stock-entries.show', $existingEntry);
-            }
-            // If empty and it's today, allow editing
-            else {
-                return redirect()->route('stock-entries.edit', $existingEntry)
-                    ->with('info', 'You already started today\'s entry. Please complete it.');
-            }
+            return redirect()->route('stock-entries.edit', $existingEntry)
+                ->with('info', 'Continue selling for today.');
         }
 
         // Get all items with their units
@@ -104,12 +102,21 @@ class StockEntryController extends Controller
                     ->first();
                 $unit->price = $unitPrice;
             }
+
+            $baseUnitCost = $item->average_unit_cost ?? 0;
+            if ($baseUnitCost <= 0) {
+                $baseUnit = $item->productUnits->firstWhere('is_base_unit', true);
+                if ($baseUnit && $baseUnit->price) {
+                    $baseUnitCost = $baseUnit->price->purchase_price ?? 0;
+                }
+            }
             
             return [
                 'id' => $item->id,
                 'name' => $item->name,
                 'category' => $item->category,
                 'price' => $barItemPrice ? $barItemPrice->price : $item->price,
+                'purchase_price' => $baseUnitCost,
                 'opening_stock' => $latestStockData[$item->id] ?? 0,
                 'ordered_stock' => $todayApprovedOrders[$item->id] ?? 0,
                 'product_units' => $item->productUnits,
@@ -223,6 +230,15 @@ class StockEntryController extends Controller
                         $newSoldQuantity = $salesQuantity;
                         $soldQuantity = $stockItem->sold_quantity + $newSoldQuantity;
                         $totalStock = $stockItem->opening_stock + $orderedStock;
+
+                        $resolvedPurchasePrice = $itemData['purchase_price'] ?? 0;
+                        if ($resolvedPurchasePrice <= 0) {
+                            $resolvedPurchasePrice = $stockItem->purchase_price;
+                        }
+                        if ($resolvedPurchasePrice <= 0) {
+                            $catalogItem = Item::find($itemId);
+                            $resolvedPurchasePrice = $catalogItem?->average_unit_cost ?? 0;
+                        }
                         
                         // Use the closing_stock from the form if provided (already converted by JavaScript)
                         $closingStock = isset($itemData['closing_stock']) 
@@ -238,11 +254,16 @@ class StockEntryController extends Controller
                             // using the current transaction price.
                             'sales_amount' => $stockItem->sales_amount + ($newSoldQuantity * $unitPrice),
                             'price' => $unitPrice,
-                            'purchase_price' => $itemData['purchase_price'] ?? $stockItem->purchase_price,
+                            'purchase_price' => $resolvedPurchasePrice,
                             'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : $stockItem->expiry_date,
                             'unit_name' => $unitName,
                         ]);
                     } else {
+                        $resolvedPurchasePrice = $itemData['purchase_price'] ?? 0;
+                        if ($resolvedPurchasePrice <= 0) {
+                            $resolvedPurchasePrice = Item::find($itemId)?->average_unit_cost ?? 0;
+                        }
+
                         $stockItem = StockEntryItem::create([
                             'stock_entry_id' => $stockEntry->id,
                             'item_id' => $itemId,
@@ -256,7 +277,7 @@ class StockEntryController extends Controller
                             'sold_quantity' => $salesQuantity,
                             'sales_amount' => $salesQuantity * $unitPrice,
                             'price' => $unitPrice,
-                            'purchase_price' => $itemData['purchase_price'] ?? 0,
+                            'purchase_price' => $resolvedPurchasePrice,
                             'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : null,
                             'unit_name' => $unitName,
                         ]);
@@ -318,6 +339,11 @@ class StockEntryController extends Controller
             }
 
             DB::commit();
+
+            if ($user->isSeller() && $entryDate === now()->format('Y-m-d')) {
+                return redirect()->route('stock-entries.index')
+                    ->with('success', 'Sales saved. Tap Continue Selling to record more.');
+            }
             
             return redirect()->route('stock-entries.show', $stockEntry)
                 ->with('success', 'Stock entry saved successfully!');
@@ -650,6 +676,11 @@ class StockEntryController extends Controller
             }
 
             DB::commit();
+
+            if ($user->isSeller() && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d')) {
+                return redirect()->route('stock-entries.index')
+                    ->with('success', 'Sales updated. Tap Continue Selling to record more.');
+            }
             
             return redirect()->route('stock-entries.show', $stockEntry)
                 ->with('success', 'Stock entry updated successfully!');
@@ -683,7 +714,7 @@ class StockEntryController extends Controller
         }
 
         $selectedBarId = $request->query('bar_id');
-        $bars = Bar::orderBy('name')->get();
+        $bars = Bar::listed()->orderBy('name')->get();
 
         $stockEntries = StockEntryItem::join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')
             ->when($selectedBarId, function ($query) use ($selectedBarId) {
@@ -735,7 +766,13 @@ class StockEntryController extends Controller
 
     public function directorCreate()
     {
-        $transferRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'approvedBy', 'items.warehouseStock'])
+        $transferRequests = WarehouseTransferRequest::with([
+            'bar',
+            'requestedBy',
+            'approvedBy',
+            'items.warehouseStock',
+            'items.item',
+        ])
             ->orderBy('requested_at', 'desc')
             ->get();
 
@@ -1011,7 +1048,7 @@ class StockEntryController extends Controller
 
     public function editItem($itemId)
     {
-        $barId = request('bar_id', \App\Models\Bar::first()->id);
+        $barId = request('bar_id', Bar::listed()->orderBy('name')->value('id'));
 
         $item = Item::with(['barItemPrices' => function($query) use ($barId) {
             $query->where('bar_id', $barId);
@@ -1301,7 +1338,7 @@ class StockEntryController extends Controller
     public function getStockHistory($itemId)
     {
         try {
-            $selectedBarId = request('bar_id', \App\Models\Bar::first()->id);
+            $selectedBarId = request('bar_id', Bar::listed()->orderBy('name')->value('id'));
             
             // Get stock history for this item and bar - include all bars for comparison
             $stockHistory = StockEntryItem::join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')

@@ -110,7 +110,7 @@ class CreditCustomersController extends Controller
             ->sort()
             ->values();
 
-        $bars = $user->isDirector() ? Bar::all() : [];
+        $bars = $user->isDirector() ? Bar::listed()->get() : [];
 
         return view('credit-customers.create', compact('existingCustomers', 'bars', 'bar'));
     }

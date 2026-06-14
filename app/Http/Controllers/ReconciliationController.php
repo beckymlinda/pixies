@@ -25,14 +25,105 @@ class ReconciliationController extends Controller
         }
 
         $date = $request->get('date', now()->format('Y-m-d'));
-        $bars = Bar::all();
+        $bars = Bar::listed()->get();
 
-        // Get stock entries for the selected date
-        $stockEntries = DailyStockEntry::with(['bar', 'user', 'cashReconciliation'])
+        $stockEntries = DailyStockEntry::with(['bar', 'user', 'cashReconciliation', 'stockEntryItems', 'payments'])
             ->whereDate('date', $date)
             ->get();
 
-        return view('reconciliation.index', compact('stockEntries', 'bars', 'date'));
+        $paymentBreakdowns = [];
+        $expenditureBreakdowns = [];
+        $creditSalesByBar = [];
+        foreach ($stockEntries as $entry) {
+            $paymentBreakdowns[$entry->bar_id] = $this->getPaymentBreakdown($entry);
+            $expenditureBreakdowns[$entry->bar_id] = $this->getExpenditureBreakdown($entry);
+            $creditSalesByBar[$entry->bar_id] = $this->getCreditSales($entry);
+        }
+
+        return view('reconciliation.index', compact(
+            'stockEntries',
+            'bars',
+            'date',
+            'paymentBreakdowns',
+            'expenditureBreakdowns',
+            'creditSalesByBar'
+        ));
+    }
+
+    /**
+     * Payment amounts grouped by method (daily report preferred, stock entry payments as fallback).
+     */
+    private function getPaymentBreakdown(DailyStockEntry $entry): array
+    {
+        $dailyReport = DailyReport::where('bar_id', $entry->bar_id)
+            ->where('date', $entry->date)
+            ->with('payments')
+            ->first();
+
+        if ($dailyReport) {
+            $breakdown = $dailyReport->payments
+                ->groupBy('payment_method')
+                ->map(fn ($items) => (float) $items->sum('amount'))
+                ->toArray();
+
+            if ($dailyReport->cash_in_hand > 0) {
+                $breakdown['Cash'] = ($breakdown['Cash'] ?? 0) + (float) $dailyReport->cash_in_hand;
+            }
+
+            return $breakdown;
+        }
+
+        $labels = [
+            'mpamba' => 'Mpamba',
+            'airtel_money' => 'Airtel Money',
+            'mo626' => 'MO626',
+            'bank' => 'Bank',
+            'pos' => 'POS',
+            'cash' => 'Cash',
+        ];
+
+        $breakdown = [];
+        foreach ($entry->payments as $payment) {
+            $label = $labels[$payment->type] ?? ucfirst(str_replace('_', ' ', $payment->type));
+            $breakdown[$label] = ($breakdown[$label] ?? 0) + (float) $payment->amount;
+        }
+
+        return $breakdown;
+    }
+
+    private function getExpenditureBreakdown(DailyStockEntry $entry): array
+    {
+        $expenses = Expense::where('date', $entry->date)
+            ->where(function ($query) use ($entry) {
+                $query->where('stock_entry_id', $entry->id)
+                    ->orWhere('user_id', $entry->user_id);
+            })
+            ->get();
+
+        $breakdown = [];
+        foreach ($expenses as $expense) {
+            $label = Expense::typeLabel($expense->type);
+            $breakdown[$label] = ($breakdown[$label] ?? 0) + (float) $expense->amount;
+        }
+
+        $shiftDebt = CustomerTab::where('date', $entry->date)
+            ->where('bar_id', $entry->bar_id)
+            ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+            ->sum('amount');
+
+        if ($shiftDebt > 0) {
+            $breakdown['Debt (Credit Sale)'] = (float) $shiftDebt;
+        }
+
+        return $breakdown;
+    }
+
+    private function getCreditSales(DailyStockEntry $entry): float
+    {
+        return (float) CustomerTab::where('date', $entry->date)
+            ->where('bar_id', $entry->bar_id)
+            ->where('status', '!=', 'paid')
+            ->sum('balance');
     }
 
     public function verify($stockEntryId)

@@ -60,8 +60,8 @@
     <!-- Modern Header -->
     <div class="reporting-header d-flex align-items-center justify-content-between shadow-sm">
         <div>
-            <h1 class="h4 fw-bold mb-1 text-dark">Daily Cash Reconciliation</h1>
-            <p class="text-muted small mb-0">Record physical cash and other payments to balance your shift.</p>
+            <h1 class="h4 fw-bold mb-1 text-dark">Shift Report</h1>
+            <p class="text-muted small mb-0">Record cash, payments, and shift expenditure to close your day.</p>
         </div>
         <div class="d-flex gap-2">
             <span class="badge bg-light text-dark border border-secondary border-opacity-10 px-3 py-2 rounded-pill">
@@ -203,6 +203,50 @@
                 </div>
             </div>
 
+            <!-- Expenditure -->
+            <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="fw-bold mb-0 text-dark">Expenditure</h5>
+                        <p class="small text-muted mb-0">Cash paid out during the shift. Debt entries become credit sales.</p>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3" onclick="addExpenditureRow()">
+                        <i class="bi bi-plus-lg me-1"></i>Add Line
+                    </button>
+                </div>
+                <div class="card-body p-4">
+                    <div id="expendituresContainer">
+                        @forelse($shiftExpenditures as $index => $exp)
+                            <div class="payment-row-modern expenditure-row" data-index="{{ $index }}">
+                                <div class="row align-items-end g-3">
+                                    <div class="col-md-3">
+                                        <label class="small fw-bold text-secondary mb-1">Type</label>
+                                        <select name="expenditures[{{ $index }}][type]" class="form-select form-control-modern expenditure-type">
+                                            @foreach($expenditureTypes as $value => $label)
+                                                <option value="{{ $value }}" {{ ($exp['type'] ?? '') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="small fw-bold text-secondary mb-1">Amount (MWK)</label>
+                                        <input type="number" name="expenditures[{{ $index }}][amount]" class="form-control form-control-modern expenditure-amount fw-bold" value="{{ $exp['amount'] ?? '' }}" min="0" step="0.01">
+                                    </div>
+                                    <div class="col-md-5">
+                                        <label class="small fw-bold text-secondary mb-1">Notes <span class="text-muted fw-normal">(required for debt — who borrowed?)</span></label>
+                                        <input type="text" name="expenditures[{{ $index }}][notes]" class="form-control form-control-modern expenditure-notes" value="{{ $exp['notes'] ?? '' }}" placeholder="e.g. John borrowed beers on tab">
+                                    </div>
+                                    <div class="col-md-1 text-end">
+                                        <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)"><i class="bi bi-trash3-fill"></i></button>
+                                    </div>
+                                </div>
+                            </div>
+                        @empty
+                            <p class="text-muted small mb-0" id="noExpenditureHint">No expenditure recorded yet. Add lunch, water, taxi, debt, etc.</p>
+                        @endforelse
+                    </div>
+                </div>
+            </div>
+
             <!-- Real-time Reconciliation Logic -->
             <div class="card border-0 shadow-sm rounded-4 bg-dark text-white mb-4">
                 <div class="card-body p-4">
@@ -210,12 +254,28 @@
                         <div class="col-md-8">
                             <div class="row g-4 text-center text-md-start">
                                 <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Expected Collected</div>
+                                    <div class="h5 mb-0 fw-bold"><span class="small opacity-50">MWK</span> <span id="expectedCollected">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
                                     <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Total Collected</div>
                                     <div class="h4 mb-0 fw-bold"><span class="small opacity-50">MWK</span> <span id="totalCollected">0</span></div>
                                 </div>
                                 <div class="col-6 col-md-4">
-                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Difference</div>
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Variance</div>
                                     <div class="h4 mb-0 fw-bold" id="varianceContainer"><span class="small opacity-50">MWK</span> <span id="missingAmount">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Operational Spend</div>
+                                    <div class="h5 mb-0 fw-bold text-warning"><span class="small opacity-50">MWK</span> <span id="operationalSpend">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">New Credit (Debt)</div>
+                                    <div class="h5 mb-0 fw-bold text-info"><span class="small opacity-50">MWK</span> <span id="newDebt">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Bankable Balance</div>
+                                    <div class="h5 mb-0 fw-bold text-success"><span class="small opacity-50">MWK</span> <span id="bankableBalance">0</span></div>
                                 </div>
                             </div>
                         </div>
@@ -228,9 +288,12 @@
                 </div>
             </div>
 
-            <div class="mb-4">
-                <label class="form-label fw-bold text-dark mb-2">Final Shift Notes</label>
-                <textarea name="notes" class="form-control form-control-modern" rows="3" placeholder="Any issues or explanations for variances...">{{ old('notes', $existingReport->notes ?? '') }}</textarea>
+            <div class="mb-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <label class="form-label fw-bold text-dark mb-2">Final Shift Notes</label>
+                    <textarea name="notes" class="form-control form-control-modern" rows="3" placeholder="Any issues or explanations for variances...">{{ old('notes', $existingReport->notes ?? '') }}</textarea>
+                </div>
+                <a href="{{ route('expenses.index') }}" class="btn btn-outline-secondary btn-sm rounded-pill">View Expense Tracker</a>
             </div>
         </form>
     </div>
@@ -238,6 +301,45 @@
 
 <script>
 let paymentRowIndex = {{ $existingReport ? $existingReport->payments->count() : 1 }};
+let expenditureRowIndex = {{ count($shiftExpenditures) > 0 ? count($shiftExpenditures) : 0 }};
+const totalSales = parseFloat('{{ $totalSales }}') || 0;
+const existingCredit = parseFloat('{{ $baseCreditSales ?? $creditSales ?? 0 }}') || 0;
+const expenditureTypes = @json($expenditureTypes);
+
+function addExpenditureRow() {
+    const hint = document.getElementById('noExpenditureHint');
+    if (hint) hint.remove();
+    const container = document.getElementById('expendituresContainer');
+    const idx = expenditureRowIndex++;
+    const options = Object.entries(expenditureTypes).map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    const div = document.createElement('div');
+    div.className = 'payment-row-modern expenditure-row';
+    div.innerHTML = `
+        <div class="row align-items-end g-3">
+            <div class="col-md-3">
+                <label class="small fw-bold text-secondary mb-1">Type</label>
+                <select name="expenditures[${idx}][type]" class="form-select form-control-modern expenditure-type">${options}</select>
+            </div>
+            <div class="col-md-3">
+                <label class="small fw-bold text-secondary mb-1">Amount (MWK)</label>
+                <input type="number" name="expenditures[${idx}][amount]" class="form-control form-control-modern expenditure-amount fw-bold" min="0" step="0.01">
+            </div>
+            <div class="col-md-5">
+                <label class="small fw-bold text-secondary mb-1">Notes</label>
+                <input type="text" name="expenditures[${idx}][notes]" class="form-control form-control-modern expenditure-notes" placeholder="Description or customer name for debt">
+            </div>
+            <div class="col-md-1 text-end">
+                <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)"><i class="bi bi-trash3-fill"></i></button>
+            </div>
+        </div>`;
+    container.appendChild(div);
+    attachListeners();
+}
+
+function removeExpenditureRow(btn) {
+    btn.closest('.expenditure-row').remove();
+    updateCalculations();
+}
 
 function addPaymentRow() {
     const container = document.getElementById('paymentsContainer');
@@ -288,36 +390,50 @@ function removePaymentRow(btn) {
 
 function updateCalculations() {
     const cashInHand = parseFloat(document.getElementById('cash_in_hand').value) || 0;
-    const expected = parseFloat('{{ $totalSales - ($creditSales ?? 0) }}') || 0;
-    
+
     let otherPayments = 0;
     document.querySelectorAll('.payment-amount').forEach(input => {
         otherPayments += parseFloat(input.value) || 0;
     });
-    
+
+    let operationalSpend = 0;
+    let newDebt = 0;
+    document.querySelectorAll('.expenditure-row').forEach(row => {
+        const type = row.querySelector('.expenditure-type')?.value;
+        const amount = parseFloat(row.querySelector('.expenditure-amount')?.value) || 0;
+        if (type === 'debt') newDebt += amount;
+        else operationalSpend += amount;
+    });
+
+    const totalCredit = existingCredit + newDebt;
+    const expectedCollected = totalSales - totalCredit - operationalSpend;
     const totalCollected = cashInHand + otherPayments;
-    const variance = totalCollected - expected;
-    
+    const variance = totalCollected - expectedCollected;
+    const bankable = totalCollected - operationalSpend;
+
+    document.getElementById('expectedCollected').innerText = expectedCollected.toLocaleString();
     document.getElementById('totalCollected').innerText = totalCollected.toLocaleString();
     document.getElementById('missingAmount').innerText = Math.abs(variance).toLocaleString();
-    
+    document.getElementById('operationalSpend').innerText = operationalSpend.toLocaleString();
+    document.getElementById('newDebt').innerText = newDebt.toLocaleString();
+    document.getElementById('bankableBalance').innerText = bankable.toLocaleString();
+
     const container = document.getElementById('varianceContainer');
     if (variance < 0) {
         container.className = 'h4 mb-0 fw-bold text-danger';
-        container.title = 'Shortfall detected';
     } else if (variance > 0) {
         container.className = 'h4 mb-0 fw-bold text-info';
-        container.title = 'Surplus detected';
     } else {
         container.className = 'h4 mb-0 fw-bold text-success';
-        container.title = 'Perfectly balanced';
     }
 }
 
 function attachListeners() {
-    document.querySelectorAll('#cash_in_hand, .payment-amount').forEach(input => {
+    document.querySelectorAll('#cash_in_hand, .payment-amount, .expenditure-amount, .expenditure-type').forEach(input => {
         input.removeEventListener('input', updateCalculations);
+        input.removeEventListener('change', updateCalculations);
         input.addEventListener('input', updateCalculations);
+        input.addEventListener('change', updateCalculations);
     });
 }
 

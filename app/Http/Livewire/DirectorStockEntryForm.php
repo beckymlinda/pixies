@@ -43,7 +43,7 @@ class DirectorStockEntryForm extends Component
         $user = Auth::user();
         
         // Directors can select any bar or fallback to the first bar if not assigned.
-        $this->bar = $user->bar ?: Bar::first();
+        $this->bar = $user->bar ?: Bar::listed()->orderBy('name')->first();
         $this->date = now()->format('Y-m-d');
 
         if (! $this->bar) {

@@ -114,7 +114,7 @@
                     <div class="card request-card border-0">
                         <div class="request-card-header d-flex justify-content-between align-items-center flex-wrap">
                             <div>
-                                <span class="badge bg-primary text-uppercase px-3 py-2 rounded-pill fw-bold">{{ $request->bar->name }}</span>
+                                <span class="badge bg-primary text-uppercase px-3 py-2 rounded-pill fw-bold">{{ $request->resolveBarName() }}</span>
                                 <span class="text-muted ms-2 small">Requested by: <strong>{{ $request->requestedBy->name ?? 'Unknown' }}</strong></span>
                             </div>
                             <div class="text-muted small">
@@ -145,23 +145,26 @@
                                             @foreach($request->items as $index => $item)
                                                 @php
                                                     $warehouseStock = $item->warehouseStock;
-                                                    $requestedBaseUnits = $item->quantity_requested * $item->conversion_factor;
-                                                    $isOutOfStock = $warehouseStock->quantity < $requestedBaseUnits;
-                                                    $maxApprove = floor($warehouseStock->quantity / $item->conversion_factor);
+                                                    $requestedBaseUnits = $item->quantity_requested * ($item->conversion_factor ?: 1);
+                                                    $availableQty = $warehouseStock?->quantity ?? 0;
+                                                    $isOutOfStock = $availableQty < $requestedBaseUnits;
+                                                    $maxApprove = $item->conversion_factor > 0
+                                                        ? floor($availableQty / $item->conversion_factor)
+                                                        : $availableQty;
                                                 @endphp
                                                 <tr class="{{ $isOutOfStock ? 'table-danger' : '' }}">
                                                     <input type="hidden" name="items[{{ $index }}][id]" value="{{ $item->id }}">
                                                     <td data-label="Item Name">
-                                                        <div class="fw-bold text-dark">{{ $warehouseStock->item_name }}</div>
-                                                        <small class="text-muted">Unit: {{ $item->unit_name ?? 'Base' }} (x{{ $item->conversion_factor }})</small>
+                                                        <div class="fw-bold text-dark">{{ $item->display_name }}</div>
+                                                        <small class="text-muted">Unit: {{ $item->unit_name ?? 'Base' }} (x{{ $item->conversion_factor ?: 1 }})</small>
                                                     </td>
                                                     <td data-label="Requested">
                                                         <span class="badge bg-secondary">{{ $item->quantity_requested }} {{ $item->unit_name ?? 'units' }}</span>
                                                         <div class="text-muted small" style="font-size: 0.75rem;">({{ $requestedBaseUnits }} base units)</div>
                                                     </td>
                                                     <td data-label="Warehouse Available">
-                                                        <span class="fw-bold {{ $warehouseStock->quantity <= 0 ? 'text-danger' : 'text-success' }}">
-                                                            {{ $warehouseStock->quantity }} base units
+                                                        <span class="fw-bold {{ $availableQty <= 0 ? 'text-danger' : 'text-success' }}">
+                                                            {{ $availableQty }} base units
                                                         </span>
                                                         <div class="text-muted small" style="font-size: 0.75rem;">(approx. {{ $maxApprove }} {{ $item->unit_name ?? 'units' }})</div>
                                                     </td>
@@ -225,18 +228,18 @@
                         @forelse($completedRequests as $history)
                             <div class="list-group-item p-3">
                                 <div class="d-flex justify-content-between align-items-center mb-2">
-                                    <span class="badge bg-secondary text-uppercase fw-bold" style="font-size: 0.7rem;">{{ $history->bar->name }}</span>
-                                    <span class="badge {{ $history->isApproved() ? 'bg-success' : 'bg-danger' }} status-badge py-1">
-                                        {{ strtoupper($history->status) }}
+                                    <span class="badge bg-secondary text-uppercase fw-bold" style="font-size: 0.7rem;">{{ $history->resolveBarName() }}</span>
+                                    <span class="badge {{ in_array($history->status, ['approved', 'partially_approved']) ? 'bg-success' : 'bg-danger' }} status-badge py-1">
+                                        {{ strtoupper(str_replace('_', ' ', $history->status)) }}
                                     </span>
                                 </div>
                                 <div class="text-dark fw-bold small">
                                     @php
                                         $itemsSummary = $history->items->map(function($item) {
-                                            return ($item->warehouseStock->item_name ?? 'Unknown') . ' (' . ($item->quantity_approved > 0 ? $item->quantity_approved : $item->quantity_requested) . ' ' . ($item->unit_name ?? 'units') . ')';
+                                            return $item->display_name . ' (' . ($item->quantity_approved > 0 ? $item->quantity_approved : $item->quantity_requested) . ' ' . ($item->unit_name ?? 'units') . ')';
                                         })->implode(', ');
                                     @endphp
-                                    {{ Str::limit($itemsSummary, 60) }}
+                                    {{ $itemsSummary ?: 'No items recorded' }}
                                 </div>
                                 <div class="text-muted small mt-1" style="font-size: 0.75rem;">
                                     <i class="bi bi-calendar3 me-1"></i>{{ $history->approved_at ? $history->approved_at->format('M d, Y h:i A') : $history->updated_at->format('M d, Y h:i A') }}

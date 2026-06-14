@@ -180,7 +180,7 @@
                         <i class="bi bi-grid-1x2"></i> Dashboard
                     </a>
                     <a href="{{ route('stock-entries.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-entries.*') ? 'active' : '' }}">
-                        <i class="bi bi-box-seam"></i> Stock Entries
+                        <i class="bi bi-cart-check"></i> Sell
                     </a>
                     <a href="{{ route('stock-expiry.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-expiry.*') ? 'active' : '' }}">
                         <i class="bi bi-exclamation-triangle"></i> Stock Expiry
@@ -190,21 +190,20 @@
                     </a>
                     <a href="{{ route('seller.orders.index') }}" class="sidebar-nav-link {{ request()->routeIs('seller.orders.index') ? 'active' : '' }} d-flex justify-content-between align-items-center">
                         <span><i class="bi bi-receipt"></i> Request History</span>
-                        @php
-                            $sellerUnseenCount = \App\Models\OrderRequest::where('bar_id', auth()->user()->bar_id)
-                                ->where('status', '!=', 'pending')
-                                ->where('seller_notified', false)
-                                ->count();
-                        @endphp
+                            @php
+                                $sellerUnseenCount = auth()->user()->bar_id
+                                    ? \App\Models\OrderRequest::where('bar_id', auth()->user()->bar_id)
+                                        ->where('status', '!=', 'pending')
+                                        ->where('seller_notified', false)
+                                        ->count()
+                                    : 0;
+                            @endphp
                         @if($sellerUnseenCount > 0)
                             <span class="badge bg-primary rounded-pill" style="font-size: 0.65rem;">{{ $sellerUnseenCount }}</span>
                         @endif
                     </a>
-                    <a href="{{ route('expenses.index') }}" class="sidebar-nav-link {{ request()->routeIs('expenses.*') ? 'active' : '' }}">
-                        <i class="bi bi-wallet2"></i> Expense Tracker
-                    </a>
                     <a href="{{ route('reporting.index') }}" class="sidebar-nav-link {{ request()->routeIs('reporting.*') ? 'active' : '' }}">
-                        <i class="bi bi-clipboard-check"></i> Shift Reports
+                        <i class="bi bi-clipboard-check"></i> Shift Report
                     </a>
                 @elseif(auth()->user()->isManager() || auth()->user()->isDirector())
                     <a href="{{ auth()->user()->isDirector() ? route('director.dashboard') : route('manager.dashboard') }}" class="sidebar-nav-link {{ request()->routeIs(auth()->user()->isDirector() ? 'director.dashboard' : 'manager.dashboard') ? 'active' : '' }}">
@@ -220,7 +219,7 @@
                         <a href="{{ route('director.orders.index') }}" class="sidebar-nav-link {{ request()->routeIs('director.orders.*') ? 'active' : '' }} d-flex justify-content-between align-items-center">
                             <span><i class="bi bi-check-circle"></i> Stock Requests</span>
                             @php
-                                $pendingOrdersCount = \App\Models\OrderRequest::where('status', 'pending')->count();
+                                $pendingOrdersCount = \App\Models\OrderRequest::unseenPendingCountForDirector();
                             @endphp
                             @if($pendingOrdersCount > 0)
                                 <span class="badge bg-warning text-dark rounded-pill" style="font-size: 0.65rem;">{{ $pendingOrdersCount }}</span>
@@ -271,7 +270,7 @@
                 <div class="d-flex align-items-center gap-3">
                     @if(auth()->user()->isDirector())
                         @php
-                            $headerPendingCount = \App\Models\OrderRequest::where('status', 'pending')->count();
+                            $headerPendingCount = \App\Models\OrderRequest::unseenPendingCountForDirector();
                         @endphp
                         <a href="{{ route('director.orders.index') }}" class="btn btn-link position-relative text-dark p-1 me-2" title="Pending Stock Requests" style="text-decoration: none;">
                             <i class="bi bi-bell fs-5"></i>

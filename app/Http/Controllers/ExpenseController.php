@@ -2,38 +2,53 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CustomerTab;
 use App\Models\Expense;
-use App\Models\DailyStockEntry;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
+use Illuminate\Pagination\LengthAwarePaginator;
 
 class ExpenseController extends Controller
 {
-    /**
-     * Display a listing of expenses.
-     */
     public function index(): View
     {
         $user = auth()->user();
-        
-        // Get expenses grouped by date
-        if ($user->isSeller()) {
-            // Sellers can only see their own expenses
-            $expensesByDate = Expense::where('user_id', $user->id)
-                ->selectRaw('date as date, SUM(amount) as total_amount, COUNT(*) as count')
-                ->whereNotNull('date')
-                ->groupBy('date')
-                ->orderBy('date', 'desc')
-                ->paginate(10);
-        } else {
-            // Managers and Directors can see all expenses
-            $expensesByDate = Expense::selectRaw('date as date, SUM(amount) as total_amount, COUNT(*) as count')
-                ->whereNotNull('date')
-                ->groupBy('date')
-                ->orderBy('date', 'desc')
-                ->paginate(10);
-        }
+
+        $expenseRows = Expense::query()
+            ->when($user->isSeller(), fn ($q) => $q->where('user_id', $user->id))
+            ->selectRaw('date, SUM(amount) as expense_total, COUNT(*) as expense_count')
+            ->whereNotNull('date')
+            ->groupBy('date')
+            ->get()
+            ->keyBy(fn ($row) => is_string($row->date) ? $row->date : $row->date->format('Y-m-d'));
+
+        $debtRows = CustomerTab::query()
+            ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+            ->when($user->isSeller(), fn ($q) => $q->where('created_by', $user->id))
+            ->when($user->bar_id, fn ($q) => $q->where('bar_id', $user->bar_id))
+            ->selectRaw('date, SUM(amount) as debt_total, COUNT(*) as debt_count')
+            ->groupBy('date')
+            ->get()
+            ->keyBy(fn ($row) => $row->date->format('Y-m-d'));
+
+        $dates = $expenseRows->keys()->merge($debtRows->keys())->unique()->sortDesc()->values();
+
+        $all = $dates->map(fn ($date) => (object) [
+            'date' => $date,
+            'total_amount' => ($expenseRows[$date]->expense_total ?? 0) + ($debtRows[$date]->debt_total ?? 0),
+            'count' => ($expenseRows[$date]->expense_count ?? 0) + ($debtRows[$date]->debt_count ?? 0),
+        ]);
+
+        $page = max(1, (int) request('page', 1));
+        $perPage = 10;
+        $expensesByDate = new LengthAwarePaginator(
+            $all->slice(($page - 1) * $perPage, $perPage)->values(),
+            $all->count(),
+            $perPage,
+            $page,
+            ['path' => request()->url(), 'query' => request()->query()]
+        );
 
         return view('expenses.index', compact('expensesByDate'));
     }
@@ -41,134 +56,114 @@ class ExpenseController extends Controller
     public function daily($date): View
     {
         $user = auth()->user();
-        
-        // Get expenses for specific date
+
         if ($user->isSeller()) {
             $expenses = Expense::where('user_id', $user->id)
                 ->where('date', $date)
                 ->with('user')
                 ->orderBy('created_at', 'desc')
                 ->get();
-                
-            $totalAmount = Expense::where('user_id', $user->id)
-                ->where('date', $date)
-                ->sum('amount');
+
+            $debtEntries = CustomerTab::whereDate('date', $date)
+                ->where('created_by', $user->id)
+                ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+                ->orderBy('created_at', 'desc')
+                ->get();
         } else {
             $expenses = Expense::where('date', $date)
                 ->with('user')
                 ->orderBy('created_at', 'desc')
                 ->get();
-                
-            $totalAmount = Expense::where('date', $date)
-                ->sum('amount');
+
+            $debtEntries = CustomerTab::whereDate('date', $date)
+                ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+                ->orderBy('created_at', 'desc')
+                ->get();
         }
 
-        return view('expenses.daily', compact('expenses', 'date', 'totalAmount'));
+        $totalAmount = $expenses->sum('amount') + $debtEntries->sum('amount');
+
+        return view('expenses.daily', compact('expenses', 'debtEntries', 'date', 'totalAmount'));
     }
 
-    /**
-     * Show the form for creating a new expense.
-     */
-    public function create(): View
+    public function create(): View|RedirectResponse
     {
+        if (auth()->user()->isSeller()) {
+            return redirect()->route('reporting.index')
+                ->with('info', 'Record expenditure in your shift report.');
+        }
+
         return view('expenses.create');
     }
 
-    /**
-     * Store a newly created expense in storage.
-     */
     public function store(Request $request): RedirectResponse
     {
+        if (auth()->user()->isSeller()) {
+            return redirect()->route('reporting.index')
+                ->with('info', 'Record expenditure in your shift report.');
+        }
         $validated = $request->validate([
-            'type' => 'required|in:Debt,Lunch,Other',
+            'type' => 'required|in:' . implode(',', array_keys(Expense::operationalTypes())),
             'amount' => 'required|numeric|min:0',
-            'description' => 'nullable|string|max:255',
+            'description' => 'nullable|string|max:500',
             'date' => 'required|date',
         ]);
 
-        $validated['user_id'] = auth()->id();
+        Expense::create([
+            'type' => $validated['type'],
+            'amount' => $validated['amount'],
+            'description' => $validated['description'] ?? null,
+            'date' => $validated['date'],
+            'user_id' => auth()->id(),
+        ]);
 
-        $expense = Expense::create($validated);
-
-        return redirect()
-            ->route('expenses.index')
-            ->with('success', 'Expense created successfully!');
+        return redirect()->route('expenses.index')->with('success', 'Expense recorded successfully.');
     }
 
-    /**
-     * Display the specified expense.
-     */
     public function show(Expense $expense): View
     {
-        // Check if user can view this expense
         $this->authorizeExpenseAccess($expense);
-
         $expense->load('user');
 
         return view('expenses.show', compact('expense'));
     }
 
-    /**
-     * Show the form for editing the specified expense.
-     */
     public function edit(Expense $expense): View
     {
-        // Check if user can edit this expense
         $this->authorizeExpenseAccess($expense);
 
         return view('expenses.edit', compact('expense'));
     }
 
-    /**
-     * Update the specified expense in storage.
-     */
     public function update(Request $request, Expense $expense): RedirectResponse
     {
-        // Check if user can edit this expense
         $this->authorizeExpenseAccess($expense);
 
         $validated = $request->validate([
-            'type' => 'required|in:Debt,Lunch,Other',
+            'type' => 'required|in:' . implode(',', array_keys(Expense::operationalTypes())),
             'amount' => 'required|numeric|min:0',
-            'description' => 'required|string|max:255',
+            'description' => 'nullable|string|max:500',
             'date' => 'required|date',
         ]);
 
         $expense->update($validated);
 
-        return redirect()
-            ->route('expenses.index')
-            ->with('success', 'Expense updated successfully!');
+        return redirect()->route('expenses.index')->with('success', 'Expense updated successfully.');
     }
 
-    /**
-     * Remove the specified expense from storage.
-     */
     public function destroy(Expense $expense): RedirectResponse
     {
-        // Check if user can delete this expense
         $this->authorizeExpenseAccess($expense);
-
         $expense->delete();
 
-        return redirect()
-            ->route('expenses.index')
-            ->with('success', 'Expense deleted successfully!');
+        return redirect()->route('expenses.index')->with('success', 'Expense deleted successfully.');
     }
 
-    /**
-     * Check if user can access the expense.
-     */
     private function authorizeExpenseAccess(Expense $expense): void
     {
         $user = auth()->user();
-        
-        // Sellers can only access their own expenses
         if ($user->isSeller() && $expense->user_id !== $user->id) {
             abort(403, 'Unauthorized access to expense.');
         }
-        
-        // Managers and Directors can access all expenses
-        // No additional checks needed for them
     }
 }

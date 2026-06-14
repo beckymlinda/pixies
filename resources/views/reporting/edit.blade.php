@@ -2,525 +2,362 @@
 
 @section('content')
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
-<div class="container-fluid px-4 py-2">
-    <!-- Flash Messages -->
-    @if(session('success'))
-        <div class="alert alert-success alert-dismissible fade show" role="alert">
-            <i class="bi bi-check-circle me-2"></i>
-            {{ session('success') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
-    
-    @if(session('error'))
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <i class="bi bi-exclamation-triangle me-2"></i>
-            {{ session('error') }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
+<style>
+    .reporting-header {
+        background: white;
+        border-bottom: 1px solid #e2e8f0;
+        margin-top: -1.5rem;
+        margin-left: -1.5rem;
+        margin-right: -1.5rem;
+        padding: 1.5rem 2rem;
+        margin-bottom: 2rem;
+    }
+    .summary-pill {
+        background: #f8fafc;
+        border-radius: 12px;
+        padding: 1rem;
+        text-align: center;
+        border: 1px solid #e2e8f0;
+        height: 100%;
+    }
+    .payment-row-modern {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    .input-group-text-modern {
+        background: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        color: #475569;
+        font-weight: 600;
+        font-size: 0.75rem;
+    }
+    .form-control-modern {
+        border: 1px solid #cbd5e1;
+        padding: 0.6rem 1rem;
+        border-radius: 8px;
+    }
+</style>
 
-    @if($errors->any())
-        <div class="alert alert-danger alert-dismissible fade show" role="alert">
-            <i class="bi bi-exclamation-triangle me-2"></i>
-            <strong>Please fix the following errors:</strong>
-            <ul class="mb-0 mt-2">
-                @foreach($errors->all() as $error)
-                    <li>{{ $error }}</li>
-                @endforeach
-            </ul>
-            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-        </div>
-    @endif
-
-    <!-- Financial Summary -->
-    <div class="row g-3 mb-4">
-        <!-- Total Sales -->
-        <div class="col-12 col-md-3">
-            <div class="card border-0 bg-light h-100">
-                <div class="card-body text-center py-3">
-                    <div class="text-primary fs-5 fw-bold">Total Sales</div>
-                    <div class="text-primary fs-3">{{ number_format($totalSales, 0) }}</div>
-                    <small class="text-muted">All sales revenue</small>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Credit Sales -->
-        <div class="col-12 col-md-6">
-            <div class="card border-0 bg-light h-100">
-                <div class="card-body text-center py-3">
-                    <div class="text-purple fs-5 fw-bold">Credit</div>
-                    <div class="text-purple fs-3">{{ number_format($creditSales, 0) }}</div>
-                    <small class="text-muted">Unpaid tabs</small>
-                </div>
-            </div>
+<div class="container-fluid p-0">
+    <div class="reporting-header d-flex align-items-center justify-content-between shadow-sm">
+        <div>
+            <h1 class="h4 fw-bold mb-1 text-dark">Edit Shift Report</h1>
+            <p class="text-muted small mb-0">Update cash, payments, and expenditure for {{ $dailyReport->date->format('M d, Y') }}.</p>
         </div>
     </div>
 
-    <!-- Edit Form -->
-    <div class="card pixies-card">
-        <div class="card-header d-flex justify-content-between align-items-center">
-            <h5 class="mb-0"><i class="bi bi-pencil me-1"></i> Edit Daily Report</h5>
-            <small class="text-muted">Updating report for {{ $dailyReport->date->format('M d, Y') }}</small>
+    <div class="px-4 pb-5">
+        @if(session('success'))
+            <div class="alert alert-success border-0 shadow-sm rounded-3 mb-4">{{ session('success') }}</div>
+        @endif
+        @if(session('error') || $errors->any())
+            <div class="alert alert-danger border-0 shadow-sm rounded-3 mb-4">
+                @if(session('error')) {{ session('error') }} @else Please correct the errors below. @endif
+            </div>
+        @endif
+
+        <div class="row g-4 mb-4">
+            <div class="col-md-6">
+                <div class="summary-pill shadow-sm bg-white">
+                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Total Sales</div>
+                    <div class="h3 mb-0 fw-bold text-dark"><span class="small fs-6 opacity-50">MWK</span> {{ number_format($totalSales) }}</div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="summary-pill shadow-sm bg-white">
+                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Credit Sales</div>
+                    <div class="h3 mb-0 fw-bold text-purple"><span class="small fs-6 opacity-50">MWK</span> {{ number_format($creditSales) }}</div>
+                </div>
+            </div>
         </div>
-        <div class="card-body">
-            <form method="POST" action="{{ route('reporting.update', $dailyReport) }}" id="reportingForm">
-                @csrf
-                @method('PUT')
-                
-                <input type="hidden" name="total_sales" value="{{ $dailyReport->total_sales }}">
 
-                <!-- Cash Information -->
-                <div class="row mb-3">
-                    <div class="col-md-4">
-                        <label for="cash_in_hand" class="form-label fw-semibold">
-                            <i class="bi bi-cash-stack me-1"></i> Cash in Hand
-                        </label>
-                        <div class="input-group">
-                            <span class="input-group-text">
-                                <i class="bi bi-currency-exchange"></i>
-                            </span>
-                            <input type="number" 
-                                   id="cash_in_hand" 
-                                   name="cash_in_hand" 
-                                   class="form-control @error('cash_in_hand') is-invalid @enderror" 
-                                   min="0" 
-                                   step="0.01" 
-                                   value="{{ old('cash_in_hand', $dailyReport->cash_in_hand) }}"
-                                   placeholder="0.00" 
-                                   required>
-                        </div>
-                        @error('cash_in_hand')
-                            <div class="alert alert-danger alert-sm mt-2">
-                                <i class="bi bi-exclamation-triangle me-1"></i>
-                                {{ $message }}
+        <form method="POST" action="{{ route('reporting.update', $dailyReport) }}" id="reportingForm">
+            @csrf
+            @method('PUT')
+            <input type="hidden" name="total_sales" value="{{ $totalSales }}">
+
+            <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
+                <div class="card-header bg-white py-3 border-bottom">
+                    <h5 class="fw-bold mb-0 text-dark">Cash & Payments</h5>
+                </div>
+                <div class="card-body p-4">
+                    <div class="row mb-4">
+                        <div class="col-md-5">
+                            <label class="form-label fw-bold text-dark mb-2">Physical Cash in Hand</label>
+                            <div class="input-group">
+                                <span class="input-group-text-modern px-3">MWK</span>
+                                <input type="number" id="cash_in_hand" name="cash_in_hand" class="form-control form-control-modern fw-bold"
+                                       value="{{ old('cash_in_hand', $dailyReport->cash_in_hand) }}" required>
                             </div>
-                        @enderror
+                        </div>
                     </div>
-                                    </div>
 
-                <!-- Payments Section -->
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <label class="form-label fw-semibold mb-0">
-                            <i class="bi bi-credit-card me-1"></i> Payment Methods
-                        </label>
-                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="addPaymentRow()">
-                            <i class="bi bi-plus-circle me-1"></i> Add Payment
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="fw-bold text-dark mb-0">Non-Cash Payments</h6>
+                        <button type="button" class="btn btn-sm btn-primary rounded-pill px-3" onclick="addPaymentRow()">
+                            <i class="bi bi-plus-lg me-1"></i>Add Method
                         </button>
                     </div>
-                    
+
                     <div id="paymentsContainer">
-                        <!-- Payment rows will be added here -->
                         @foreach($dailyReport->payments as $index => $payment)
-                            <div class="payment-row row g-2 mb-2" data-index="{{ $index }}">
-                                <div class="col-md-4">
-                                    <select name="payments[{{ $index }}][payment_method]" class="form-select payment-method" required>
-                                        <option value="">Select Method</option>
-                                        @foreach($paymentMethods as $value => $label)
-                                            <option value="{{ $value }}" {{ $payment->payment_method == $value ? 'selected' : '' }}>
-                                                {{ $label }}
-                                            </option>
-                                        @endforeach
-                                    </select>
-                                </div>
-                                <div class="col-md-4">
-                                    <input type="number" 
-                                           name="payments[{{ $index }}][amount]" 
-                                           class="form-control payment-amount" 
-                                           min="0" 
-                                           step="0.01" 
-                                           value="{{ old("payments.{$index}.amount", $payment->amount) }}"
-                                           placeholder="0.00" 
-                                           required>
-                                </div>
-                                <div class="col-md-3">
-                                    <input type="text" 
-                                           name="payments[{{ $index }}][description]" 
-                                           class="form-control" 
-                                           value="{{ old("payments.{$index}.description", $payment->description ?? '') }}"
-                                           placeholder="Description (optional)">
-                                </div>
-                                <div class="col-md-1">
-                                    <button type="button" class="btn btn-sm btn-outline-danger w-100" onclick="removePaymentRow(this)">
-                                        <i class="bi bi-trash"></i>
-                                    </button>
+                            <div class="payment-row-modern" data-index="{{ $index }}">
+                                <div class="row align-items-end g-3">
+                                    <div class="col-md-4">
+                                        <label class="small fw-bold text-secondary mb-1">Method</label>
+                                        <select name="payments[{{ $index }}][payment_method]" class="form-select form-control-modern payment-method" required>
+                                            @foreach($paymentMethods as $value => $label)
+                                                <option value="{{ $value }}" {{ $payment->payment_method == $value ? 'selected' : '' }}>{{ $label }}</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                    <div class="col-md-3">
+                                        <label class="small fw-bold text-secondary mb-1">Amount</label>
+                                        <input type="number" name="payments[{{ $index }}][amount]" class="form-control form-control-modern payment-amount fw-bold"
+                                               value="{{ old("payments.{$index}.amount", $payment->amount) }}" required>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="small fw-bold text-secondary mb-1">Reference/Note</label>
+                                        <input type="text" name="payments[{{ $index }}][description]" class="form-control form-control-modern"
+                                               value="{{ old("payments.{$index}.description", $payment->description) }}" placeholder="Optional">
+                                    </div>
+                                    <div class="col-md-1 text-end">
+                                        <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removePaymentRow(this)">
+                                            <i class="bi bi-trash3-fill"></i>
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         @endforeach
                     </div>
                 </div>
+            </div>
 
-                <!-- Real-time Summary -->
-                <div class="row mb-3">
-                    <div class="col-12">
-                        <div class="card bg-light">
-                            <div class="card-body py-2">
-                                <div class="row text-center">
-                                    <div class="col-3">
-                                        <small class="text-muted">Cash in Hand</small>
-                                        <div class="fw-bold text-success" id="cashInHand">{{ number_format($dailyReport->cash_in_hand, 2) }}</div>
-                                        <small class="text-muted">Physical cash</small>
+            <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="fw-bold mb-0 text-dark">Expenditure</h5>
+                        <p class="small text-muted mb-0">Operational costs reduce bankable cash. Debt becomes credit sales.</p>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3" onclick="addExpenditureRow()">
+                        <i class="bi bi-plus-lg me-1"></i>Add Line
+                    </button>
+                </div>
+                <div class="card-body p-4">
+                    <div id="expendituresContainer">
+                        @forelse($shiftExpenditures as $index => $exp)
+                            <div class="payment-row-modern expenditure-row" data-index="{{ $index }}">
+                                <div class="row align-items-end g-3">
+                                    <div class="col-md-3">
+                                        <label class="small fw-bold text-secondary mb-1">Type</label>
+                                        <select name="expenditures[{{ $index }}][type]" class="form-select form-control-modern expenditure-type">
+                                            @foreach($expenditureTypes as $value => $label)
+                                                <option value="{{ $value }}" {{ ($exp['type'] ?? '') === $value ? 'selected' : '' }}>{{ $label }}</option>
+                                            @endforeach
+                                        </select>
                                     </div>
-                                    <div class="col-3">
-                                        <small class="text-muted">Other Payments</small>
-                                        <div class="fw-bold text-info" id="otherPayments">{{ number_format($totalCollected - $dailyReport->cash_in_hand, 2) }}</div>
-                                        <small class="text-muted">Mobile money</small>
+                                    <div class="col-md-3">
+                                        <label class="small fw-bold text-secondary mb-1">Amount (MWK)</label>
+                                        <input type="number" name="expenditures[{{ $index }}][amount]" class="form-control form-control-modern expenditure-amount fw-bold"
+                                               value="{{ $exp['amount'] ?? '' }}" min="0" step="0.01">
                                     </div>
-                                    <div class="col-3">
-                                        <small class="text-muted">Total Collected</small>
-                                        <div class="fw-bold text-primary" id="totalCollected">{{ number_format($totalCollected, 2) }}</div>
-                                        <small class="text-muted">Cash + Other</small>
+                                    <div class="col-md-5">
+                                        <label class="small fw-bold text-secondary mb-1">Notes <span class="text-muted fw-normal">(who borrowed for debt?)</span></label>
+                                        <input type="text" name="expenditures[{{ $index }}][notes]" class="form-control form-control-modern expenditure-notes"
+                                               value="{{ $exp['notes'] ?? '' }}" placeholder="e.g. John borrowed beers on tab">
                                     </div>
-                                    <div class="col-3">
-                                        <small class="text-muted">Missing Amount</small>
-                                        <div class="fw-bold text-danger" id="missingAmount">{{ number_format($missingMoney, 2) }}</div>
-                                        <small class="text-muted">Collected - (Sales - Credit)</small>
+                                    <div class="col-md-1 text-end">
+                                        <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)">
+                                            <i class="bi bi-trash3-fill"></i>
+                                        </button>
                                     </div>
                                 </div>
                             </div>
+                        @empty
+                            <p class="text-muted small mb-0" id="noExpenditureHint">No expenditure recorded yet.</p>
+                        @endforelse
+                    </div>
+                </div>
+            </div>
+
+            <div class="card border-0 shadow-sm rounded-4 bg-dark text-white mb-4">
+                <div class="card-body p-4">
+                    <div class="row align-items-center g-4">
+                        <div class="col-md-8">
+                            <div class="row g-4 text-center text-md-start">
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Expected Collected</div>
+                                    <div class="h5 mb-0 fw-bold"><span class="small opacity-50">MWK</span> <span id="expectedCollected">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Total Collected</div>
+                                    <div class="h4 mb-0 fw-bold"><span class="small opacity-50">MWK</span> <span id="totalCollected">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Variance</div>
+                                    <div class="h4 mb-0 fw-bold" id="varianceContainer"><span class="small opacity-50">MWK</span> <span id="missingAmount">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Operational Spend</div>
+                                    <div class="h5 mb-0 fw-bold text-warning"><span class="small opacity-50">MWK</span> <span id="operationalSpend">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">New Credit (Debt)</div>
+                                    <div class="h5 mb-0 fw-bold text-info"><span class="small opacity-50">MWK</span> <span id="newDebt">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Bankable Balance</div>
+                                    <div class="h5 mb-0 fw-bold text-success"><span class="small opacity-50">MWK</span> <span id="bankableBalance">0</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4 text-md-end">
+                            <button type="submit" class="btn btn-primary rounded-pill px-5 py-2 fw-bold shadow">
+                                <i class="bi bi-check-circle-fill me-2"></i>Update Report
+                            </button>
                         </div>
                     </div>
                 </div>
+            </div>
 
-                <!-- Notes -->
-                <div class="row mb-3">
-                    <div class="col-12">
-                        <label for="notes" class="form-label fw-semibold">
-                            <i class="bi bi-text-paragraph me-1"></i> Notes (Optional)
-                        </label>
-                        <textarea id="notes" 
-                                  name="notes" 
-                                  class="form-control" 
-                                  rows="2" 
-                                  placeholder="Add any notes about today's cash handling...">{{ old('notes', $dailyReport->notes ?? '') }}</textarea>
-                    </div>
+            <div class="mb-4 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div class="flex-grow-1">
+                    <label class="form-label fw-bold text-dark mb-2">Shift Notes</label>
+                    <textarea name="notes" class="form-control form-control-modern" rows="3">{{ old('notes', $dailyReport->notes) }}</textarea>
                 </div>
-
-                <!-- Form Actions -->
-                <div class="d-flex gap-2 justify-content-end">
-                    <a href="{{ route('reporting.show', $dailyReport) }}" class="btn btn-secondary">
-                        <i class="bi bi-x-circle me-1"></i> Cancel
-                    </a>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-check-circle me-1"></i> Update Report
-                    </button>
-                </div>
-            </form>
-        </div>
+                <a href="{{ route('expenses.index') }}" class="btn btn-outline-secondary btn-sm rounded-pill">View Expense Tracker</a>
+            </div>
+        </form>
     </div>
 </div>
 
-<style>
-/* =========================
-   BASE
-========================= */
-body {
-    background: #f6f7fb;
-    font-family: system-ui, sans-serif;
-}
-
-/* =========================
-   COMPACT CARDS
-========================= */
-.pixies-compact-card .card-body {
-    padding: 8px 10px;
-}
-
-.pixies-compact-title {
-    font-size: 12px;
-    margin-bottom: 2px;
-    color: #6b7280;
-}
-
-.pixies-compact-value {
-    font-size: 16px;
-    font-weight: 700;
-}
-
-/* =========================
-   FORM STYLING
-========================= */
-.payment-row {
-    background: #f8f9fa;
-    border-radius: 8px;
-    padding: 10px;
-    border: 1px solid #e9ecef;
-}
-
-.payment-row:hover {
-    background: #f1f3f4;
-}
-
-/* =========================
-   MOBILE RESPONSIVE
-========================= */
-@media (max-width: 768px) {
-    /* Section Headers */
-    .card .card-body h5 {
-        font-size: 1rem !important;
-        margin-bottom: 1rem !important;
-    }
-    
-    /* Compact Cards Mobile */
-    .pixies-compact-card .card-body {
-        padding: 12px 8px;
-    }
-    
-    .pixies-compact-title {
-        font-size: 11px;
-        margin-bottom: 4px;
-    }
-    
-    .pixies-compact-value {
-        font-size: 18px;
-        font-weight: 600;
-    }
-    
-    .pixies-compact-value.fs-4 {
-        font-size: 20px !important;
-    }
-    
-    .pixies-compact-value.fs-1 {
-        font-size: 24px !important;
-    }
-    
-    /* Alert Boxes Mobile */
-    .alert {
-        padding: 0.75rem;
-        font-size: 0.875rem;
-    }
-    
-    .alert h6 {
-        font-size: 0.9rem !important;
-        margin-bottom: 0.5rem !important;
-    }
-    
-    .alert .fs-4 {
-        font-size: 1.25rem !important;
-    }
-    
-    .alert .fs-3 {
-        font-size: 1.5rem !important;
-    }
-    
-    /* Form Elements Mobile */
-    .form-control {
-        font-size: 0.875rem;
-        padding: 0.5rem 0.75rem;
-    }
-    
-    .form-label {
-        font-size: 0.875rem;
-        margin-bottom: 0.25rem;
-    }
-    
-    .btn {
-        font-size: 0.875rem;
-        padding: 0.5rem 1rem;
-    }
-    
-    /* Payment Rows Mobile */
-    .payment-row {
-        padding: 0.5rem;
-    }
-    
-    .payment-row .col-md-4,
-    .payment-row .col-md-1 {
-        margin-bottom: 0.5rem;
-    }
-    
-    /* Card Body Mobile */
-    .card-body {
-        padding: 0.75rem;
-    }
-    
-    /* Spacing Mobile */
-    .row.g-2 > * {
-        padding: 0.25rem;
-    }
-    
-    .row.g-3 > * {
-        padding: 0.5rem;
-    }
-    
-    /* Financial Summary Cards Mobile */
-    .col-md-4 .pixies-compact-card .card-body {
-        padding: 1rem 0.5rem;
-    }
-    
-    .col-md-3 .pixies-compact-card .card-body {
-        padding: 0.75rem 0.25rem;
-    }
-    
-    /* Bankable Balance Card Mobile */
-    .border-success .card-body {
-        padding: 1.5rem 0.75rem;
-    }
-    
-    /* Small text adjustments */
-    small {
-        font-size: 0.75rem;
-    }
-    
-    .text-muted {
-        font-size: 0.75rem;
-    }
-    
-    /* Hide some visual elements on very small screens */
-    @media (max-width: 480px) {
-        .pixies-compact-title {
-            font-size: 10px;
-        }
-        
-        .pixies-compact-value {
-            font-size: 16px;
-        }
-        
-        .pixies-compact-value.fs-4 {
-            font-size: 18px !important;
-        }
-        
-        .pixies-compact-value.fs-1 {
-            font-size: 20px !important;
-        }
-        
-        .alert {
-            padding: 0.5rem;
-        }
-        
-        .form-control {
-            font-size: 0.8rem;
-            padding: 0.375rem 0.5rem;
-        }
-        
-        .btn {
-            font-size: 0.8rem;
-            padding: 0.375rem 0.75rem;
-        }
-    }
-}
-
-/* =========================
-   TABLET RESPONSIVE
-========================= */
-@media (min-width: 769px) and (max-width: 1024px) {
-    .pixies-compact-card .card-body {
-        padding: 10px 8px;
-    }
-    
-    .pixies-compact-value.fs-4 {
-        font-size: 22px !important;
-    }
-    
-    .pixies-compact-value.fs-1 {
-        font-size: 28px !important;
-    }
-}
-</style>
-
 <script>
 let paymentRowIndex = {{ $dailyReport->payments->count() }};
+let expenditureRowIndex = {{ count($shiftExpenditures) > 0 ? count($shiftExpenditures) : 0 }};
+const totalSales = parseFloat('{{ $totalSales }}') || 0;
+const existingCredit = parseFloat('{{ $baseCreditSales ?? $creditSales ?? 0 }}') || 0;
+const expenditureTypes = @json($expenditureTypes);
+const paymentMethods = @json($paymentMethods);
+
+function addExpenditureRow() {
+    const hint = document.getElementById('noExpenditureHint');
+    if (hint) hint.remove();
+    const container = document.getElementById('expendituresContainer');
+    const idx = expenditureRowIndex++;
+    const options = Object.entries(expenditureTypes).map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    const div = document.createElement('div');
+    div.className = 'payment-row-modern expenditure-row';
+    div.innerHTML = `
+        <div class="row align-items-end g-3">
+            <div class="col-md-3">
+                <label class="small fw-bold text-secondary mb-1">Type</label>
+                <select name="expenditures[${idx}][type]" class="form-select form-control-modern expenditure-type">${options}</select>
+            </div>
+            <div class="col-md-3">
+                <label class="small fw-bold text-secondary mb-1">Amount (MWK)</label>
+                <input type="number" name="expenditures[${idx}][amount]" class="form-control form-control-modern expenditure-amount fw-bold" min="0" step="0.01">
+            </div>
+            <div class="col-md-5">
+                <label class="small fw-bold text-secondary mb-1">Notes</label>
+                <input type="text" name="expenditures[${idx}][notes]" class="form-control form-control-modern expenditure-notes" placeholder="Description or customer name for debt">
+            </div>
+            <div class="col-md-1 text-end">
+                <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)"><i class="bi bi-trash3-fill"></i></button>
+            </div>
+        </div>`;
+    container.appendChild(div);
+    attachListeners();
+}
+
+function removeExpenditureRow(btn) {
+    btn.closest('.expenditure-row').remove();
+    updateCalculations();
+}
 
 function addPaymentRow() {
     const container = document.getElementById('paymentsContainer');
-    const paymentMethods = @json($paymentMethods);
-    
-    const row = document.createElement('div');
-    row.className = 'payment-row row g-2 mb-2';
-    row.dataset.index = paymentRowIndex;
-    
-    row.innerHTML = `
-        <div class="col-md-4">
-            <select name="payments[${paymentRowIndex}][payment_method]" class="form-select payment-method" required>
-                <option value="">Select Method</option>
-                ${Object.entries(paymentMethods).map(([value, label]) => 
-                    `<option value="${value}">${label}</option>`
-                ).join('')}
-            </select>
-        </div>
-        <div class="col-md-4">
-            <input type="number" name="payments[${paymentRowIndex}][amount]" class="form-control payment-amount" min="0" step="0.01" placeholder="0.00" required>
-        </div>
-        <div class="col-md-3">
-            <input type="text" name="payments[${paymentRowIndex}][description]" class="form-control" placeholder="Description (optional)">
-        </div>
-        <div class="col-md-1">
-            <button type="button" class="btn btn-sm btn-outline-danger w-100" onclick="removePaymentRow(this)">
-                <i class="bi bi-trash"></i>
-            </button>
-        </div>
-    `;
-    
-    // Insert at the top (after the first child if exists, otherwise as first child)
-    if (container.firstChild) {
-        container.insertBefore(row, container.firstChild);
-    } else {
-        container.appendChild(row);
-    }
-    
+    const div = document.createElement('div');
+    div.className = 'payment-row-modern';
+    div.dataset.index = paymentRowIndex;
+    div.innerHTML = `
+        <div class="row align-items-end g-3">
+            <div class="col-md-4">
+                <label class="small fw-bold text-secondary mb-1">Method</label>
+                <select name="payments[${paymentRowIndex}][payment_method]" class="form-select form-control-modern payment-method" required>
+                    <option value="">Select Method</option>
+                    ${Object.entries(paymentMethods).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="small fw-bold text-secondary mb-1">Amount</label>
+                <input type="number" name="payments[${paymentRowIndex}][amount]" class="form-control form-control-modern payment-amount fw-bold" required>
+            </div>
+            <div class="col-md-4">
+                <label class="small fw-bold text-secondary mb-1">Reference/Note</label>
+                <input type="text" name="payments[${paymentRowIndex}][description]" class="form-control form-control-modern" placeholder="Optional">
+            </div>
+            <div class="col-md-1 text-end">
+                <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removePaymentRow(this)"><i class="bi bi-trash3-fill"></i></button>
+            </div>
+        </div>`;
+    container.appendChild(div);
     paymentRowIndex++;
-    
-    // Add event listeners to new inputs
-    row.querySelector('.payment-amount').addEventListener('input', updateCalculations);
+    attachListeners();
 }
 
-function removePaymentRow(button) {
-    const row = button.closest('.payment-row');
-    const container = document.getElementById('paymentsContainer');
-    
-    // Don't remove the last row
-    if (container.children.length > 1) {
-        row.remove();
+function removePaymentRow(btn) {
+    const rows = document.querySelectorAll('#paymentsContainer .payment-row-modern');
+    if (rows.length > 1) {
+        btn.closest('.payment-row-modern').remove();
         updateCalculations();
-    } else {
-        alert('You must have at least one payment method.');
     }
 }
 
 function updateCalculations() {
     const cashInHand = parseFloat(document.getElementById('cash_in_hand').value) || 0;
-    const totalSales = parseFloat('{{ $totalSales }}') || 0;
-    const creditSales = parseFloat('{{ $creditSales }}') || 0;
-    const totalExpenses = parseFloat('{{ $totalExpenses }}') || 0;
-    
     let otherPayments = 0;
-    document.querySelectorAll('.payment-amount').forEach(input => {
-        otherPayments += parseFloat(input.value) || 0;
+    document.querySelectorAll('.payment-amount').forEach(input => { otherPayments += parseFloat(input.value) || 0; });
+
+    let operationalSpend = 0;
+    let newDebt = 0;
+    document.querySelectorAll('.expenditure-row').forEach(row => {
+        const type = row.querySelector('.expenditure-type')?.value;
+        const amount = parseFloat(row.querySelector('.expenditure-amount')?.value) || 0;
+        if (type === 'debt') newDebt += amount;
+        else operationalSpend += amount;
     });
-    
-    // Total Collected includes Cash in Hand + Other Payments (Mobile)
+
+    const totalCredit = existingCredit + newDebt;
+    const expectedCollected = totalSales - totalCredit - operationalSpend;
     const totalCollected = cashInHand + otherPayments;
-    
-    // Reconciliation variance:
-    // +ve = surplus, -ve = missing.
-    const expectedCollected = totalSales - creditSales;
-    const missingAmount = totalCollected - expectedCollected;
-    
-    // Update summary values
-    document.getElementById('cashInHand').textContent = cashInHand.toFixed(2);
-    document.getElementById('otherPayments').textContent = otherPayments.toFixed(2);
-    document.getElementById('totalCollected').textContent = totalCollected.toFixed(2);
-    document.getElementById('missingAmount').textContent = Math.abs(missingAmount).toFixed(2);
-    
-    // Update colors based on values
-    const cashInHandEl = document.getElementById('cashInHand');
-    const missingAmountEl = document.getElementById('missingAmount');
-    
-    cashInHandEl.className = cashInHand >= 0 ? 'fw-bold text-success' : 'fw-bold text-danger';
-    missingAmountEl.className = missingAmount < 0 ? 'fw-bold text-danger' : (missingAmount > 0 ? 'fw-bold text-info' : 'fw-bold text-success');
+    const variance = totalCollected - expectedCollected;
+    const bankable = totalCollected - operationalSpend;
+
+    document.getElementById('expectedCollected').innerText = expectedCollected.toLocaleString();
+    document.getElementById('totalCollected').innerText = totalCollected.toLocaleString();
+    document.getElementById('missingAmount').innerText = Math.abs(variance).toLocaleString();
+    document.getElementById('operationalSpend').innerText = operationalSpend.toLocaleString();
+    document.getElementById('newDebt').innerText = newDebt.toLocaleString();
+    document.getElementById('bankableBalance').innerText = bankable.toLocaleString();
+
+    const container = document.getElementById('varianceContainer');
+    container.className = variance < 0 ? 'h4 mb-0 fw-bold text-danger' : (variance > 0 ? 'h4 mb-0 fw-bold text-info' : 'h4 mb-0 fw-bold text-success');
 }
 
-// Initialize calculations on page load
-document.addEventListener('DOMContentLoaded', function() {
-    // Add event listeners to existing inputs
-    document.getElementById('cash_in_hand').addEventListener('input', updateCalculations);
-    document.querySelectorAll('.payment-amount').forEach(input => {
+function attachListeners() {
+    document.querySelectorAll('#cash_in_hand, .payment-amount, .expenditure-amount, .expenditure-type').forEach(input => {
+        input.removeEventListener('input', updateCalculations);
+        input.removeEventListener('change', updateCalculations);
         input.addEventListener('input', updateCalculations);
+        input.addEventListener('change', updateCalculations);
     });
-    
-    // Initial calculation
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    attachListeners();
     updateCalculations();
 });
 </script>

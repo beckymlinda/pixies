@@ -65,19 +65,36 @@
     <!-- Modern Header -->
     <div class="index-header d-flex align-items-center justify-content-between shadow-sm">
         <div>
-            <h1 class="h3 fw-bold mb-1 text-dark">Stock Entries</h1>
-            <p class="text-muted small mb-0">Manage and track daily inventory logs for all bar locations.</p>
+            @if(auth()->user()->isSeller())
+                <h1 class="h3 fw-bold mb-1 text-dark">Sell</h1>
+                <p class="text-muted small mb-0">Record today's sales and track recent selling sessions.</p>
+            @else
+                <h1 class="h3 fw-bold mb-1 text-dark">Stock Entries</h1>
+                <p class="text-muted small mb-0">Manage and track daily inventory logs for all bar locations.</p>
+            @endif
         </div>
         <div class="d-flex gap-2">
             @if(auth()->user()->isSeller())
-                <a href="{{ route('stock-entries.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                    <i class="bi bi-plus-lg me-2"></i>New Entry
-                </a>
+                @if($todayEntry ?? null)
+                    <a href="{{ route('stock-entries.edit', $todayEntry) }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                        <i class="bi bi-play-fill me-2"></i>Continue Selling
+                    </a>
+                @else
+                    <a href="{{ route('stock-entries.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                        <i class="bi bi-plus-lg me-2"></i>Start Selling
+                    </a>
+                @endif
             @endif
         </div>
     </div>
 
     <div class="px-4">
+        @if(session('success'))
+            <div class="alert alert-success border-0 shadow-sm rounded-3 mb-3">{{ session('success') }}</div>
+        @endif
+        @if(session('info'))
+            <div class="alert alert-info border-0 shadow-sm rounded-3 mb-3">{{ session('info') }}</div>
+        @endif
         <div class="card data-card shadow-sm border-0">
             <div class="table-responsive">
                 <table class="table index-table mb-0">
@@ -124,8 +141,8 @@
                                         <i class="bi bi-eye-fill"></i>
                                     </a>
                                     @if(auth()->user()->isAdmin() || (auth()->user()->isSeller() && $entry->date->isToday()))
-                                        <a href="{{ route('stock-entries.edit', $entry) }}" class="btn-action ms-1" title="Edit Entry">
-                                            <i class="bi bi-pencil-fill"></i>
+                                        <a href="{{ route('stock-entries.edit', $entry) }}" class="btn-action ms-1" title="{{ auth()->user()->isSeller() ? 'Continue Selling' : 'Edit Entry' }}">
+                                            <i class="bi {{ auth()->user()->isSeller() ? 'bi-play-fill' : 'bi-pencil-fill' }}"></i>
                                         </a>
                                     @endif
                                 </td>
@@ -134,7 +151,7 @@
                             <tr>
                                 <td colspan="5" class="text-center py-5">
                                     <div class="opacity-25 display-4 mb-3">📂</div>
-                                    <p class="text-muted">No stock entries found. Record your first entry to get started.</p>
+                                    <p class="text-muted">{{ auth()->user()->isSeller() ? 'No selling sessions yet. Start selling to record today\'s sales.' : 'No stock entries found. Record your first entry to get started.' }}</p>
                                 </td>
                             </tr>
                         @endforelse
