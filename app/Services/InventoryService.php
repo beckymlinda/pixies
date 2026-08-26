@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\ProductUnit;
 use App\Models\ProductUnitPrice;
 use App\Models\Item;
+use App\Models\WarehouseStock;
 
 class InventoryService
 {
@@ -58,6 +59,58 @@ class InventoryService
         }
 
         return $baseQuantity / $unit->conversion_factor;
+    }
+
+    /**
+     * Seller order/approval quantities are counted in bottles.
+     */
+    public function convertSellerOrderQuantityToBaseUnits(int $itemId, float $quantity): float
+    {
+        if ($quantity <= 0) {
+            return 0;
+        }
+
+        $baseUnit = $this->getBaseUnit($itemId);
+        if ($baseUnit && $baseUnit->unit_name === 'Shot') {
+            $factor = $this->resolveBottleConversionFactor($itemId);
+            if ($factor > 1) {
+                return $quantity * $factor;
+            }
+        }
+
+        return $this->convertToBaseUnits($itemId, $quantity, 'Bottle');
+    }
+
+    public function resolveBottleConversionFactor(int $itemId): int
+    {
+        $bottleUnit = ProductUnit::where('item_id', $itemId)
+            ->where('unit_name', 'Bottle')
+            ->first();
+
+        if ($bottleUnit && $bottleUnit->conversion_factor > 1) {
+            return (int) $bottleUnit->conversion_factor;
+        }
+
+        $item = Item::find($itemId);
+        if ($item) {
+            $warehouse = WarehouseStock::where('item_name', $item->name)->first();
+            if ($warehouse) {
+                return max(1, $warehouse->getShotsPerBottle());
+            }
+        }
+
+        return 1;
+    }
+
+    public function convertBaseUnitsToSellerDisplay(int $itemId, float $baseQuantity, string $displayUnit): float
+    {
+        if ($baseQuantity <= 0) {
+            return 0;
+        }
+
+        $converted = $this->convertFromBaseUnits($itemId, $baseQuantity, $displayUnit);
+
+        return $displayUnit === 'Bottle' ? floor($converted) : $converted;
     }
 
     /**

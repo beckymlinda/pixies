@@ -86,14 +86,24 @@
                 <i class="bi bi-arrow-left"></i>
             </a>
             <div>
-                <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Today\'s Sales' : 'Stock Entry Report' }}</h1>
+                <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Today\'s Sales' : 'Sales Report' }}</h1>
                 <p class="text-muted small mb-0">Recorded for {{ $stockEntry->date->format('l, F d, Y') }}</p>
             </div>
         </div>
         <div class="d-flex gap-2 flex-wrap">
+            @php $canDeleteSale = auth()->user()->isDirector() || (auth()->user()->isSeller() && $stockEntry->bar_id === auth()->user()->bar_id && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d')); @endphp
+            @if($canDeleteSale)
+                <form method="POST" action="{{ route('stock-entries.destroy', $stockEntry) }}" onsubmit="return confirm('Delete this sale and all associated records?');" class="d-inline">
+                    @csrf
+                    @method('DELETE')
+                    <button type="submit" class="btn btn-outline-danger rounded-pill px-4 shadow-sm">
+                        <i class="bi bi-trash me-2"></i>Delete Sale
+                    </button>
+                </form>
+            @endif
             @if(auth()->user()->isSeller() && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d'))
-                <a href="{{ route('stock-entries.edit', $stockEntry) }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                    <i class="bi bi-play-fill me-2"></i>Continue Selling
+                <a href="{{ route('stock-entries.sell') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                    <i class="bi bi-cart-check me-2"></i>Sell
                 </a>
             @endif
             @if(auth()->user()->bar)

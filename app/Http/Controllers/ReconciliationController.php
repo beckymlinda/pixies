@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\DailyReport;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\CashReconciliation;
 use App\Models\Bar;
 use App\Models\CustomerTab;
@@ -27,7 +27,7 @@ class ReconciliationController extends Controller
         $date = $request->get('date', now()->format('Y-m-d'));
         $bars = Bar::listed()->get();
 
-        $stockEntries = DailyStockEntry::with(['bar', 'user', 'cashReconciliation', 'stockEntryItems', 'payments'])
+        $stockEntries = Sale::with(['bar', 'user', 'cashReconciliation', 'stockEntryItems', 'payments'])
             ->whereDate('date', $date)
             ->get();
 
@@ -53,7 +53,7 @@ class ReconciliationController extends Controller
     /**
      * Payment amounts grouped by method (daily report preferred, stock entry payments as fallback).
      */
-    private function getPaymentBreakdown(DailyStockEntry $entry): array
+    private function getPaymentBreakdown(Sale $entry): array
     {
         $dailyReport = DailyReport::where('bar_id', $entry->bar_id)
             ->where('date', $entry->date)
@@ -66,7 +66,11 @@ class ReconciliationController extends Controller
                 ->map(fn ($items) => (float) $items->sum('amount'))
                 ->toArray();
 
-            if ($dailyReport->cash_in_hand > 0) {
+            // The stored "Cash" payment row and cash_in_hand represent the SAME cash.
+            // Only fall back to cash_in_hand when there is no explicit Cash row,
+            // otherwise cash would be counted twice.
+            $hasCashRow = $dailyReport->payments->contains('payment_method', 'Cash');
+            if (!$hasCashRow && $dailyReport->cash_in_hand > 0) {
                 $breakdown['Cash'] = ($breakdown['Cash'] ?? 0) + (float) $dailyReport->cash_in_hand;
             }
 
@@ -91,7 +95,7 @@ class ReconciliationController extends Controller
         return $breakdown;
     }
 
-    private function getExpenditureBreakdown(DailyStockEntry $entry): array
+    private function getExpenditureBreakdown(Sale $entry): array
     {
         $expenses = Expense::where('date', $entry->date)
             ->where(function ($query) use ($entry) {
@@ -118,7 +122,7 @@ class ReconciliationController extends Controller
         return $breakdown;
     }
 
-    private function getCreditSales(DailyStockEntry $entry): float
+    private function getCreditSales(Sale $entry): float
     {
         return (float) CustomerTab::where('date', $entry->date)
             ->where('bar_id', $entry->bar_id)
@@ -135,7 +139,7 @@ class ReconciliationController extends Controller
             abort(403, 'Unauthorized access');
         }
 
-        $stockEntry = DailyStockEntry::with(['bar', 'user', 'stockEntryItems', 'payments', 'cashReconciliation'])
+        $stockEntry = Sale::with(['bar', 'user', 'stockEntryItems', 'payments', 'cashReconciliation'])
             ->findOrFail($stockEntryId);
 
         // Check if already verified
@@ -151,8 +155,11 @@ class ReconciliationController extends Controller
             ->first();
 
         if ($dailyReport) {
-            $cashInHand = $dailyReport->cash_in_hand;
-            $electronicTotal = $dailyReport->payments()->sum('amount');
+            // Cash row and cash_in_hand are the same cash; prefer the row when present
+            // and keep electronic to non-cash methods to avoid double counting.
+            $cashRowTotal = (float) $dailyReport->payments()->where('payment_method', 'Cash')->sum('amount');
+            $cashInHand = $cashRowTotal > 0 ? $cashRowTotal : (float) $dailyReport->cash_in_hand;
+            $electronicTotal = (float) $dailyReport->payments()->where('payment_method', '!=', 'Cash')->sum('amount');
         } else {
             $cashInHand = 0;
             $electronicTotal = $stockEntry->payments->sum('amount');
@@ -226,9 +233,9 @@ class ReconciliationController extends Controller
             DB::commit();
             
             $message = match($reconciliation->status) {
-                'matched' => '✅ Cash reconciliation completed - Perfect match!',
-                'shortage' => '❌ Cash reconciliation completed - Shortage detected',
-                'excess' => '⚠️ Cash reconciliation completed - Excess cash detected',
+                'matched' => 'âœ… Cash reconciliation completed - Perfect match!',
+                'shortage' => 'âŒ Cash reconciliation completed - Shortage detected',
+                'excess' => 'âš ï¸ Cash reconciliation completed - Excess cash detected',
                 default => 'Cash reconciliation completed'
             };
 
@@ -274,3 +281,4 @@ class ReconciliationController extends Controller
         return view('reconciliation.history', compact('reconciliations', 'summary', 'startDate', 'endDate'));
     }
 }
+

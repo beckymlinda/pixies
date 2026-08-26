@@ -1,8 +1,10 @@
 @extends('layouts.app')
 
 @section('content')
-@php 
-    $pageTitle = 'Restock Item'; 
+@php
+    $pageTitle = 'Restock Item';
+    $restockConversionFactor = old('conversion_factor', $warehouseStock->resolvePurchaseConversionFactor());
+    $baseUnitName = $warehouseStock->units->firstWhere('is_base_unit', true)?->unit_name ?? 'Bottle';
 @endphp
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
 <style>
@@ -157,8 +159,8 @@
                         <div class="row">
                             <div class="col-md-6 mb-3">
                                 <label class="form-label">Conversion Factor *</label>
-                                <input type="number" name="conversion_factor" id="conversion_factor" class="form-control" value="{{ old('conversion_factor', 24) }}" required min="1" step="1" placeholder="e.g., 24">
-                                <div class="helper-text">How many base units in 1 {{ old('purchase_unit', 'Crate') }}?</div>
+                                <input type="number" name="conversion_factor" id="conversion_factor" class="form-control" value="{{ $restockConversionFactor }}" required min="1" step="1" placeholder="e.g., 24">
+                                <div class="helper-text" id="conversion_hint">How many {{ strtolower($baseUnitName) }}s in 1 {{ old('purchase_unit', $warehouseStock->purchase_unit) }}?</div>
                             </div>
 
                             <div class="col-md-6 mb-3">
@@ -227,11 +229,42 @@
 </div>
 
 <script>
+const PURCHASE_UNIT_DEFAULTS = {
+    Crate: 24,
+    Carton: 24,
+    Case: 24,
+    Box: 12,
+    Pack: 6,
+    Keg: 1,
+    Bottle: 1,
+    Shot: 1,
+    Other: 1
+};
+const BASE_UNIT_NAME = @json($baseUnitName);
+
 // Live calculation logic
 const purchaseUnitInput = document.getElementById('purchase_unit');
 const quantityPurchasedInput = document.getElementById('quantity_purchased');
 const totalPurchaseCostInput = document.getElementById('total_purchase_cost');
 const conversionFactorInput = document.getElementById('conversion_factor');
+const conversionHint = document.getElementById('conversion_hint');
+let conversionManuallyEdited = false;
+
+function syncConversionFactor(forcePreset = false) {
+    const purchase = purchaseUnitInput.value;
+    if (purchase && purchase === BASE_UNIT_NAME) {
+        conversionFactorInput.value = 1;
+        conversionFactorInput.readOnly = true;
+        return;
+    }
+    conversionFactorInput.readOnly = false;
+    if (forcePreset || (!conversionManuallyEdited && PURCHASE_UNIT_DEFAULTS[purchase])) {
+        conversionFactorInput.value = PURCHASE_UNIT_DEFAULTS[purchase];
+    }
+    if (conversionHint) {
+        conversionHint.textContent = 'How many ' + BASE_UNIT_NAME.toLowerCase() + 's in 1 ' + (purchase || 'unit') + '?';
+    }
+}
 
 // Calculation displays
 const totalBaseUnitsDisplay = document.getElementById('totalBaseUnits');
@@ -259,11 +292,18 @@ function calculateAll() {
 }
 
 // Add event listeners
+purchaseUnitInput.addEventListener('change', () => {
+    syncConversionFactor(true);
+    calculateAll();
+});
 quantityPurchasedInput.addEventListener('input', calculateAll);
 totalPurchaseCostInput.addEventListener('input', calculateAll);
-conversionFactorInput.addEventListener('input', calculateAll);
+conversionFactorInput.addEventListener('input', () => {
+    conversionManuallyEdited = true;
+    calculateAll();
+});
 
-// Initial calculation
+syncConversionFactor(false);
 calculateAll();
 </script>
 @endsection

@@ -8,14 +8,31 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Item extends Model
 {
-    protected $fillable = ['name', 'category', 'price', 'director_stock', 'is_castel', 'description', 'expiry_date', 'average_unit_cost', 'lifetime_quantity_purchased', 'lifetime_quantity_sold', 'lifetime_profit_estimate'];
+    protected $fillable = ['name', 'category', 'price', 'director_stock', 'is_castel', 'is_hidden', 'description', 'expiry_date', 'average_unit_cost', 'lifetime_quantity_purchased', 'lifetime_quantity_sold', 'lifetime_profit_estimate'];
 
     protected $casts = [
         'price' => 'decimal:2',
         'average_unit_cost' => 'decimal:2',
         'lifetime_profit_estimate' => 'decimal:2',
         'expiry_date' => 'date',
+        'is_castel' => 'boolean',
     ];
+
+    protected static function booted()
+    {
+        static::saving(function ($item) {
+            if (!empty($item->name)) {
+                $keywords = ['green', 'special', 'doppel', 'chill', 'kucheminerals', 'sapitwa', 'castel', 'pome', 'breezer', 'gin', 'brandy', 'carlsberg'];
+                $nameLower = strtolower($item->name);
+                foreach ($keywords as $k) {
+                    if (str_contains($nameLower, $k)) {
+                        $item->is_castel = true;
+                        break;
+                    }
+                }
+            }
+        });
+    }
 
     public function barItemPrices()
     {

@@ -64,9 +64,9 @@
                         {{ number_format(abs($missingMoney), 0) }}
                     </div>
                     <small class="text-muted">
-                        Collected − (Sales − Credit − Operating Expenses)
+                        Collected − (Sales − Credit)
                         @if(isset($expectedCollected))
-                            <br><span class="text-dark">Expected in till: {{ number_format($expectedCollected, 0) }}</span>
+                            <br><span class="text-dark">Expected collected: {{ number_format($expectedCollected, 0) }}</span>
                         @endif
                     </small>
                 </div>
@@ -98,7 +98,8 @@
                             <thead class="table-light">
                                 <tr>
                                     <th>Payment Method</th>
-                                    <th class="text-end">Amount</th>
+                                    <th>Recorded Values</th>
+                                    <th class="text-end">Total Amount</th>
                                     <th class="text-end">%</th>
                                 </tr>
                             </thead>
@@ -108,6 +109,7 @@
                                     <td>
                                         <span class="badge bg-success text-white">Cash</span>
                                     </td>
+                                    <td class="text-muted small">—</td>
                                     <td class="text-end fw-bold text-success">{{ number_format($dailyReport->cash_in_hand, 0) }}</td>
                                     <td class="text-end">{{ number_format($totalCollected > 0 ? ($dailyReport->cash_in_hand / $totalCollected) * 100 : 0, 1) }}%</td>
                                 </tr>
@@ -116,12 +118,14 @@
                                     <td>
                                         <span class="badge {{ $method === 'Debt Collection' ? 'bg-indigo' : 'bg-primary' }} text-white">{{ $method }}</span>
                                     </td>
+                                    <td class="text-muted small">{{ $data['breakdown'] ?: '—' }}</td>
                                     <td class="text-end fw-bold">{{ number_format($data['amount'], 0) }}</td>
                                     <td class="text-end">{{ number_format($data['percentage'], 1) }}%</td>
                                 </tr>
                                 @endforeach
                                 <tr class="table-active fw-bold">
                                     <td>TOTAL COLLECTED:</td>
+                                    <td></td>
                                     <td class="text-end text-primary">{{ number_format($totalCollected, 0) }}</td>
                                     <td class="text-end">100%</td>
                                 </tr>
@@ -141,7 +145,7 @@
                     <i class="bi bi-arrow-left me-1"></i> Back to Reports
                 </a>
                 
-                @if((auth()->user()->isSeller() && $dailyReport->user_id === auth()->id() && $dailyReport->date->format('Y-m-d') === now()->format('Y-m-d')) || auth()->user()->isManager() || auth()->user()->isDirector())
+                @if($dailyReport->isEditableBy(auth()->user()))
                     <a href="{{ route('reporting.edit', $dailyReport) }}" class="btn btn-warning">
                         <i class="bi bi-pencil me-1"></i> Edit Report
                     </a>

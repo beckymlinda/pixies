@@ -308,18 +308,34 @@
                         </div>
                         <div class="pl-line">
                             <span class="pl-label indent">
-                                Less: Operating Expenses
-                                <span class="formula-hint">Daily expenses (lunch, taxi, damage, etc.)</span>
+                                Less: Bar Shift Expenses
+                                <span class="formula-hint">Shift till costs (lunch, taxi, etc.) — affects drawer</span>
                             </span>
                             <span class="pl-value muted">(MWK {{ number_format($totals['expenses']) }})</span>
                         </div>
-                        <div class="pl-line grand-total">
+                        <div class="pl-line section-total">
                             <span class="pl-label">
-                                Net Profit / (Loss)
-                                <span class="formula-hint">Gross Profit − Expenses · Net Margin: {{ $totals['profit_margin'] }}%</span>
+                                Net Bar Profit / (Loss)
+                                <span class="formula-hint">Gross Profit − Bar Shift Expenses · Net Margin: {{ $totals['profit_margin'] }}%</span>
                             </span>
                             <span class="pl-value {{ $totals['net_profit'] >= 0 ? 'positive' : 'negative' }}">
                                 MWK {{ number_format($totals['net_profit']) }}
+                            </span>
+                        </div>
+                        <div class="pl-line">
+                            <span class="pl-label indent">
+                                Management Overhead (informational)
+                                <span class="formula-hint">Manager/director costs — tracked separately, not subtracted from bar sales</span>
+                            </span>
+                            <span class="pl-value muted">MWK {{ number_format($totals['overhead_expenses'] ?? 0) }}</span>
+                        </div>
+                        <div class="pl-line grand-total" style="background: #f1f5f9;">
+                            <span class="pl-label">
+                                Combined View
+                                <span class="formula-hint">Net bar profit minus management overhead (company-level)</span>
+                            </span>
+                            <span class="pl-value {{ ($totals['net_profit'] - ($totals['overhead_expenses'] ?? 0)) >= 0 ? 'positive' : 'negative' }}">
+                                MWK {{ number_format($totals['net_profit'] - ($totals['overhead_expenses'] ?? 0)) }}
                             </span>
                         </div>
                     </div>

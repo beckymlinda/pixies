@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('expenses', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('stock_entry_id')->constrained('daily_stock_entries')->onDelete('cascade');
+            $table->foreignId('stock_entry_id')->constrained('sales')->onDelete('cascade');
             $table->string('type'); // lunch, taxi, damage, debt, other
             $table->decimal('amount', 8, 2);
             $table->text('description')->nullable();
@@ -29,3 +29,4 @@ return new class extends Migration
         Schema::dropIfExists('expenses');
     }
 };
+

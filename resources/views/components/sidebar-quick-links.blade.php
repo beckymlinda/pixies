@@ -104,6 +104,13 @@
             @endif
         </a>
 
+        @if(auth()->user()->isManager() || auth()->user()->isDirector())
+        <a href="{{ route('activity-logs.index') }}" class="sidebar-link {{ request()->routeIs('activity-logs.*') ? 'active' : '' }}">
+            <div class="sidebar-link-icon">📋</div>
+            <div class="sidebar-link-text">Activity Log</div>
+        </a>
+        @endif
+
         <a href="{{ route('profit-loss.index') }}" class="sidebar-link {{ request()->routeIs('profit-loss.*') ? 'active' : '' }}">
             <div class="sidebar-link-icon">📈</div>
             <div class="sidebar-link-text">Profit & Loss</div>

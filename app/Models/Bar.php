@@ -8,6 +8,10 @@ class Bar extends Model
 {
     public const EXCLUDED_NAMES = ['Pixies Njerwa'];
 
+    public const LIQUOR_SHOP = 'Pixies Liquor Shop';
+
+    public const BAR_B = 'Pixies Bar B';
+
     protected $fillable = ['name'];
 
     public function scopeListed($query)
@@ -15,14 +19,35 @@ class Bar extends Model
         return $query->whereNotIn('name', self::EXCLUDED_NAMES);
     }
 
+    public function supportsWarehouseBaseUnit(string $baseUnit): bool
+    {
+        if ($baseUnit === 'Shot' && $this->name === self::LIQUOR_SHOP) {
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Shot selling unit is only available for Bar B warehouse transfers.
+     */
+    public function allowsWarehouseTransferUnit(string $unitName): bool
+    {
+        if ($unitName === 'Shot' && $this->name !== self::BAR_B) {
+            return false;
+        }
+
+        return true;
+    }
+
     public function barItemPrices()
     {
         return $this->hasMany(BarItemPrice::class);
     }
 
-    public function dailyStockEntries()
+    public function sales()
     {
-        return $this->hasMany(DailyStockEntry::class);
+        return $this->hasMany(Sale::class);
     }
 
     public function users()
@@ -36,3 +61,4 @@ class Bar extends Model
                     ->withPivot('price');
     }
 }
+

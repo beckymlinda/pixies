@@ -15,8 +15,8 @@
                             </div>
                         </div>
                         <div class="flex-grow-1">
-                            <h1 class="h2 mb-1 text-white fw-bold">Director Stock Entries</h1>
-                            <p class="text-white-50 mb-0">Manage and view all stock entries across all bars</p>
+                            <h1 class="h2 mb-1 text-white fw-bold">Director Sales Records</h1>
+                            <p class="text-white-50 mb-0">Manage and view all sales records across all bars</p>
                         </div>
                     </div>
                 </div>
@@ -30,7 +30,7 @@
             <div class="card border-0 shadow-sm">
                 <div class="card-header bg-white border-bottom py-3">
                     <h3 class="h4 mb-0 fw-semibold">
-                        <i class="bi bi-table me-2 text-primary"></i> All Stock Entries
+                        <i class="bi bi-table me-2 text-primary"></i> All Sales Records
                     </h3>
                 </div>
                 <div class="card-body">
@@ -107,7 +107,7 @@
                                                 <div class="bg-light rounded-3 p-3 d-inline-flex mb-2">
                                                     <i class="bi bi-inbox fs-4 text-muted"></i>
                                                 </div>
-                                                <div class="small">No stock entries found</div>
+                                                <div class="small">No sales records found</div>
                                             </div>
                                         </td>
                                     </tr>
@@ -132,7 +132,7 @@
                 <div class="card-body">
                     <div class="d-flex justify-content-between align-items-center">
                         <div class="text-muted">
-                            <i class="bi bi-clipboard-data me-1"></i> Showing all stock entries
+                            <i class="bi bi-clipboard-data me-1"></i> Showing all sales records
                         </div>
                         
                         <div class="d-flex gap-2">

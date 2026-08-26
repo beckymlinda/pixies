@@ -4,7 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\Bar;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\Expense;
 use App\Models\StockEntryItem;
 use Carbon\Carbon;
@@ -37,17 +37,17 @@ class SellerController extends Controller
             ->whereBetween('date', [$weekStart, $weekEnd])
             ->sum('amount');
 
-        $recentEntries = DailyStockEntry::where('bar_id', $bar->id)
+        $recentEntries = Sale::where('bar_id', $bar->id)
             ->with(['bar', 'stockEntryItems'])
             ->orderBy('date', 'desc')
             ->limit(5)
             ->get();
 
-        $todayEntry = DailyStockEntry::where('bar_id', $bar->id)
+        $todayEntry = Sale::where('bar_id', $bar->id)
             ->whereDate('date', Carbon::today())
             ->first();
 
-        $totalSales = DailyStockEntry::where('bar_id', $bar->id)
+        $totalSales = Sale::where('bar_id', $bar->id)
             ->with('stockEntryItems')
             ->get()
             ->sum(function ($entry) {
@@ -71,3 +71,4 @@ class SellerController extends Controller
         ));
     }
 }
+

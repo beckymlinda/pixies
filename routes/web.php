@@ -10,11 +10,49 @@ use App\Http\Controllers\StockEntryController;
 use App\Http\Controllers\StockExpiryController;
 use App\Http\Controllers\ProfitLossController;
 use App\Http\Controllers\ExpenseController;
+use App\Http\Controllers\ActivityLogController;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\ReportsController;
 use App\Http\Controllers\OrderRequestController;
 use App\Http\Controllers\WarehouseStockController;
+use App\Http\Controllers\CastelController;
+use App\Http\Controllers\DamagedGoodController;
+use Illuminate\Support\Facades\Artisan;
 
+
+Route::get('/run-migrate-fresh-seed', function () {
+    try {
+        Artisan::call('migrate:fresh', [
+            '--seed' => true,
+            '--force' => true,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Migration fresh and seeding completed.',
+            'output' => Artisan::output(),
+        ]);
+    } catch (\Throwable $e) {
+        return response()->json([
+            'success' => false,
+            'error' => $e->getMessage(),
+        ], 500);
+    }
+});
+
+// Castel Bottle Count Routes
+Route::middleware('auth')->prefix('castel')->name('castel.')->group(function () {
+    Route::get('/', [CastelController::class, 'index'])->name('index');
+    Route::post('/reset', [CastelController::class, 'reset'])->name('reset');
+});
+
+
+
+Route::get('/storage-link', function () {
+    Artisan::call('storage:link');
+
+    return Artisan::output() ?: 'Storage link created successfully.';
+});
 Route::get('/', function () {
     return view('welcome');
 });
@@ -50,15 +88,16 @@ Route::middleware(['auth', 'role:director'])->prefix('director')->name('director
 // Stock Entry Routes
 Route::middleware('auth')->prefix('stock-entries')->name('stock-entries.')->group(function () {
     Route::get('/', [StockEntryController::class, 'index'])->name('index');
+    Route::get('/sell', [StockEntryController::class, 'sell'])->name('sell');
     Route::get('/create', [StockEntryController::class, 'create'])->name('create');
     Route::post('/', [StockEntryController::class, 'store'])->name('store');
     Route::get('/{stockEntry}', [StockEntryController::class, 'show'])->name('show');
     Route::get('/{stockEntry}/edit', [StockEntryController::class, 'edit'])->name('edit');
     Route::put('/{stockEntry}', [StockEntryController::class, 'update'])->name('update');
+    Route::delete('/{stockEntry}', [StockEntryController::class, 'destroy'])->name('destroy');
 });
 
-// Director Stock Entry Routes (Director only)
-Route::middleware(['auth', 'role:director,manager'])->prefix('director-stock-entries')->name('director-stock-entries.')->group(function () {
+Route::middleware(['auth', 'role:director'])->prefix('director-stock-entries')->name('director-stock-entries.')->group(function () {
     Route::get('/', [StockEntryController::class, 'directorIndex'])->name('index');
     Route::get('/create', [StockEntryController::class, 'directorCreate'])->name('create');
     Route::post('/', [StockEntryController::class, 'directorStore'])->name('store');
@@ -67,6 +106,10 @@ Route::middleware(['auth', 'role:director,manager'])->prefix('director-stock-ent
 // Manager / Director Stock Overview
 Route::middleware(['auth', 'role:manager,director'])->prefix('stock')->name('stock.')->group(function () {
     Route::get('/', [StockEntryController::class, 'stockOverview'])->name('index');
+    Route::post('/update', [StockEntryController::class, 'updateStock'])->name('update');
+    Route::post('/add', [StockEntryController::class, 'addStock'])->name('add');
+    Route::post('/restock', [StockEntryController::class, 'restockStock'])->name('restock');
+    Route::get('/delete', [StockEntryController::class, 'deleteStock'])->name('delete');
 });
 
 // Simple Routes for Item Management
@@ -123,11 +166,19 @@ Route::middleware('auth')->prefix('profit-loss')->name('profit-loss.')->group(fu
 
 // Reports Routes (Manager and Director only)
 Route::middleware('auth')->prefix('reports')->name('reports.')->group(function () {
+    Route::get('/export', [ReportsController::class, 'export'])->name('export');
     Route::get('/', [ReportsController::class, 'index'])->name('dashboard');
+});
+
+// Damaged Goods (read-only log from Balance page)
+Route::middleware('auth')->prefix('damaged-goods')->name('damaged-goods.')->group(function () {
+    Route::get('/', [DamagedGoodController::class, 'index'])->name('index');
+    Route::get('/{damagedGood}/photo', [DamagedGoodController::class, 'photo'])->name('photo');
 });
 
 // Reporting Routes (Bar Seller, Manager, Director only)
  Route::middleware('auth')->prefix('reporting')->name('reporting.')->group(function () {
+    Route::get('/export', [ReportsController::class, 'reportingExport'])->name('export');
     Route::get('/', [ReportsController::class, 'reportingIndex'])->name('index');
     Route::get('/create', [ReportsController::class, 'reportingCreate'])->name('create');
     Route::post('/', [ReportsController::class, 'reportingStore'])->name('store');
@@ -139,6 +190,7 @@ Route::middleware('auth')->prefix('reports')->name('reports.')->group(function (
 // Credit Customers Routes (Bar Seller, Manager, Director only)
 Route::middleware('auth')->prefix('credit-customers')->name('credit-customers.')->group(function () {
     Route::get('/', [CreditCustomersController::class, 'index'])->name('index');
+    Route::get('/export', [CreditCustomersController::class, 'export'])->name('export');
     Route::get('/create', [CreditCustomersController::class, 'create'])->name('create');
     Route::post('/', [CreditCustomersController::class, 'store'])->name('store');
     Route::get('/{customerName}', [CreditCustomersController::class, 'show'])->name('show');
@@ -147,7 +199,6 @@ Route::middleware('auth')->prefix('credit-customers')->name('credit-customers.')
     Route::get('/{customerTab}/edit', [CreditCustomersController::class, 'edit'])->name('edit');
     Route::put('/{customerTab}', [CreditCustomersController::class, 'update'])->name('update');
     Route::delete('/{customerTab}', [CreditCustomersController::class, 'destroy'])->name('destroy');
-    Route::get('/export', [CreditCustomersController::class, 'export'])->name('export');
 });
 
 // Reconciliation Routes (Manager and Director only)
@@ -169,6 +220,8 @@ Route::middleware('auth')->prefix('warehouse')->name('warehouse.')->group(functi
     Route::get('/transfer-requests', [WarehouseStockController::class, 'transferRequests'])->name('transfer-requests');
     Route::post('/transfer-requests/{transferRequest}/approve', [WarehouseStockController::class, 'approveTransfer'])->name('transfer-requests.approve');
     Route::post('/transfer-requests/{transferRequest}/reject', [WarehouseStockController::class, 'rejectTransfer'])->name('transfer-requests.reject');
+    Route::post('/transfer-requests/{transferRequest}/revert', [WarehouseStockController::class, 'revertTransfer'])->name('transfer-requests.revert');
+    Route::post('/transfer-requests/{transferRequest}/quick-approve', [WarehouseStockController::class, 'quickApproveTransfer'])->name('transfer-requests.quick-approve');
     Route::get('/{warehouseStock}', [WarehouseStockController::class, 'show'])->name('show');
     Route::get('/{warehouseStock}/edit', [WarehouseStockController::class, 'edit'])->name('edit');
     Route::get('/{warehouseStock}/restock', [WarehouseStockController::class, 'restock'])->name('restock');
@@ -181,6 +234,11 @@ Route::middleware('auth')->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
+});
+
+// Activity Log Routes (Manager and Director only)
+Route::middleware(['auth', 'role:manager,director'])->prefix('activity-logs')->name('activity-logs.')->group(function () {
+    Route::get('/', [ActivityLogController::class, 'index'])->name('index');
 });
 
 require __DIR__.'/auth.php';

@@ -1,11 +1,11 @@
-<?php
+﻿<?php
 require __DIR__ . '/vendor/autoload.php';
 $app = require __DIR__ . '/bootstrap/app.php';
 $kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
 $kernel->bootstrap();
 
 $stockEntryId = 14;
-$s = App\Models\DailyStockEntry::find($stockEntryId);
+$s = App\Models\Sale::find($stockEntryId);
 if (!$s) { echo "stockEntry not found\n"; exit; }
 
 echo "stock_entry_id={$s->id} bar_id={$s->bar_id} date={$s->date}\n";
@@ -36,3 +36,4 @@ echo "sumFallback=" . $fallbackExpenses->sum('amount') . "\n";
 
 $recon = App\Models\CashReconciliation::where('stock_entry_id', $s->id)->first();
 if ($recon) echo "recon: id={$recon->id} expected_cash={$recon->expected_cash} cash_counted={$recon->cash_counted} electronic_counted={$recon->electronic_counted} difference={$recon->difference}\n";
+

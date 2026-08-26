@@ -2,10 +2,15 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Bar;
+use App\Models\Item;
+use App\Models\ProductUnit;
+use App\Models\ProductUnitPrice;
 use App\Models\WarehouseStock;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Validation\Rule;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -96,9 +101,12 @@ class WarehouseStockController extends Controller
      */
     public function show(WarehouseStock $warehouseStock): View
     {
-        $warehouseStock->load(['units.barPrices', 'transactions' => function ($query) {
-            $query->orderBy('transaction_date', 'desc');
-        }]);
+        $warehouseStock->load([
+            'units.barPrices',
+            'transactions' => fn ($query) => $query->with('destinationBar')->orderByDesc('transaction_date'),
+        ]);
+
+        $warehouseStock->syncLifetimeMetricsFromLedger();
         
         $bars = \App\Models\Bar::listed()->orderBy('name')->get();
         
@@ -110,6 +118,8 @@ class WarehouseStockController extends Controller
      */
     public function restock(WarehouseStock $warehouseStock): View
     {
+        $warehouseStock->load('units');
+
         return view('warehouse.restock', compact('warehouseStock'));
     }
 
@@ -130,6 +140,13 @@ class WarehouseStockController extends Controller
 
         DB::beginTransaction();
         try {
+            $baseUnitName = $warehouseStock->units()->where('is_base_unit', true)->value('unit_name') ?? 'Bottle';
+            $validated['conversion_factor'] = $this->normalizePurchaseConversionFactor(
+                $validated['purchase_unit'],
+                $baseUnitName,
+                (int) $validated['conversion_factor']
+            );
+
             // Calculate cost per base unit
             $totalBaseUnits = $validated['quantity_purchased'] * $validated['conversion_factor'];
             $calculatedBaseUnitCost = $totalBaseUnits > 0 ? $validated['total_purchase_cost'] / $totalBaseUnits : 0;
@@ -149,6 +166,18 @@ class WarehouseStockController extends Controller
             // Update current stock
             $warehouseStock->quantity += $totalBaseUnits;
             $warehouseStock->save();
+
+            \App\Models\ActivityLog::log([
+                'action' => 'warehouse_stock_restocked',
+                'description' => "Restocked warehouse item '{$warehouseStock->item_name}': added {$totalBaseUnits} units (new total: {$warehouseStock->quantity})",
+                'subject_type' => WarehouseStock::class,
+                'subject_id' => $warehouseStock->id,
+                'new_values' => [
+                    'item_name' => $warehouseStock->item_name,
+                    'added_quantity' => $totalBaseUnits,
+                    'total_quantity' => $warehouseStock->quantity,
+                ],
+            ]);
 
             DB::commit();
             return redirect()->route('warehouse.show', $warehouseStock)
@@ -180,11 +209,23 @@ class WarehouseStockController extends Controller
             'base_unit' => 'required|string|in:Bottle,Shot',
             'conversion_factor' => 'required|integer|min:1',
             'bar_selling_prices' => 'nullable|array',
-            'additional_units' => 'nullable|array',
+            'bottle_bar_selling_prices' => 'nullable|array',
+            'shots_per_bottle' => [
+                'nullable',
+                'integer',
+                'min:1',
+                Rule::requiredIf(fn () => $request->input('base_unit') === 'Shot' && $request->input('purchase_unit') !== 'Bottle'),
+            ],
         ]);
 
         DB::beginTransaction();
         try {
+            $validated['conversion_factor'] = $this->normalizePurchaseConversionFactor(
+                $validated['purchase_unit'],
+                $validated['base_unit'],
+                (int) $validated['conversion_factor']
+            );
+
             // Calculate cost per base unit
             $totalBaseUnits = $validated['quantity_purchased'] * $validated['conversion_factor'];
             $calculatedBaseUnitCost = $totalBaseUnits > 0 ? $validated['total_purchase_cost'] / $totalBaseUnits : 0;
@@ -193,13 +234,20 @@ class WarehouseStockController extends Controller
             $validated['purchase_price'] = $calculatedBaseUnitCost;
             $validated['calculated_base_unit_cost'] = $calculatedBaseUnitCost;
             $validated['average_unit_cost'] = $calculatedBaseUnitCost;
-            $validated['lifetime_quantity_purchased'] = $totalBaseUnits;
+            $validated['lifetime_quantity_purchased'] = 0;
+            $validated['lifetime_quantity_sold'] = 0;
+            $validated['lifetime_profit_estimate'] = 0;
 
             // Set default selling price if not provided (use first bar price)
-            if (empty($validated['selling_price']) && !empty($validated['bar_selling_prices'])) {
-                $firstBarPrice = reset($validated['bar_selling_prices']);
-                if ($firstBarPrice > 0) {
-                    $validated['selling_price'] = $firstBarPrice;
+            if (empty($validated['selling_price'])) {
+                $firstBottlePrice = collect($this->filterBottleBarSellingPrices($request->input('bottle_bar_selling_prices', [])))->first();
+                if ($firstBottlePrice > 0) {
+                    $validated['selling_price'] = $firstBottlePrice;
+                } elseif (! empty($validated['bar_selling_prices'])) {
+                    $firstBarPrice = reset($validated['bar_selling_prices']);
+                    if ($firstBarPrice > 0) {
+                        $validated['selling_price'] = $firstBarPrice;
+                    }
                 }
             }
 
@@ -223,62 +271,52 @@ class WarehouseStockController extends Controller
                 'purchase_price' => $calculatedBaseUnitCost,
             ]);
 
-            // Create purchase unit record
-            $purchaseUnit = \App\Models\WarehouseUnit::create([
-                'warehouse_stock_id' => $warehouseStock->id,
-                'unit_name' => $validated['purchase_unit'],
-                'conversion_factor' => $validated['conversion_factor'],
-                'is_base_unit' => false,
-                'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
-            ]);
+            // Create purchase unit record when different from base unit
+            if ($validated['purchase_unit'] !== $validated['base_unit']) {
+                \App\Models\WarehouseUnit::create([
+                    'warehouse_stock_id' => $warehouseStock->id,
+                    'unit_name' => $validated['purchase_unit'],
+                    'conversion_factor' => $validated['conversion_factor'],
+                    'is_base_unit' => false,
+                    'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
+                ]);
+            }
 
             // Handle bar-specific selling prices
             if ($request->has('bar_selling_prices') && is_array($request->bar_selling_prices)) {
-                foreach ($request->bar_selling_prices as $barId => $sellingPrice) {
-                    if ($sellingPrice > 0) {
-                        \App\Models\WarehouseUnitBarPrice::create([
-                            'warehouse_unit_id' => $warehouseUnit->id,
-                            'bar_id' => $barId,
-                            'selling_price' => $sellingPrice,
-                        ]);
-                    }
-                }
-            }
-
-            // Handle additional units (created by manager)
-            if ($request->has('additional_units') && is_array($request->additional_units)) {
-                foreach ($request->additional_units as $unitData) {
-                    if (empty($unitData['unit_name'])) continue;
-
-                    $conv = isset($unitData['conversion_factor']) ? intval($unitData['conversion_factor']) : 1;
-                    $purchasePrice = $calculatedBaseUnitCost * $conv;
-
-                    $newUnit = \App\Models\WarehouseUnit::create([
-                        'warehouse_stock_id' => $warehouseStock->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'conversion_factor' => $conv,
-                        'is_base_unit' => false,
-                        'purchase_price' => $purchasePrice,
+                foreach ($this->filterBarSellingPrices($request->bar_selling_prices, $validated['base_unit']) as $barId => $sellingPrice) {
+                    \App\Models\WarehouseUnitBarPrice::create([
+                        'warehouse_unit_id' => $warehouseUnit->id,
+                        'bar_id' => $barId,
+                        'selling_price' => $sellingPrice,
                     ]);
-
-                    // Create per-bar prices if provided
-                    if (!empty($unitData['bar_selling_prices']) && is_array($unitData['bar_selling_prices'])) {
-                        foreach ($unitData['bar_selling_prices'] as $barId => $price) {
-                            if ($price > 0) {
-                                try {
-                                    \App\Models\WarehouseUnitBarPrice::create([
-                                        'warehouse_unit_id' => $newUnit->id,
-                                        'bar_id' => $barId,
-                                        'selling_price' => $price,
-                                    ]);
-                                } catch (\Exception $e) {
-                                    \Log::warning('Failed to create warehouse unit bar price', ['error' => $e->getMessage()]);
-                                }
-                            }
-                        }
-                    }
                 }
             }
+
+            $this->removeUnsupportedBarPrices($warehouseUnit, $validated['base_unit']);
+
+            $this->syncBottleSellingUnit(
+                $warehouseStock,
+                $validated['base_unit'],
+                $calculatedBaseUnitCost,
+                $this->filterBottleBarSellingPrices($request->input('bottle_bar_selling_prices', [])),
+                $this->resolveShotsPerBottle($request, $validated)
+            );
+
+            $this->removeLegacySellingUnits($warehouseStock);
+            $this->syncLinkedItemProductUnits($warehouseStock);
+
+            \App\Models\ActivityLog::log([
+                'action' => 'warehouse_stock_added',
+                'description' => "Added new warehouse stock item '{$warehouseStock->item_name}': {$totalBaseUnits} units",
+                'subject_type' => WarehouseStock::class,
+                'subject_id' => $warehouseStock->id,
+                'new_values' => [
+                    'item_name' => $warehouseStock->item_name,
+                    'quantity' => $totalBaseUnits,
+                    'purchase_price' => $calculatedBaseUnitCost,
+                ],
+            ]);
 
             DB::commit();
             return redirect()->route('warehouse.index')
@@ -297,6 +335,8 @@ class WarehouseStockController extends Controller
     public function edit(WarehouseStock $warehouseStock): View
     {
         $bars = \App\Models\Bar::listed()->orderBy('name')->get();
+        $warehouseStock->load(['units.barPrices']);
+
         return view('warehouse.edit', compact('warehouseStock', 'bars'));
     }
 
@@ -319,11 +359,23 @@ class WarehouseStockController extends Controller
             'base_unit' => 'required|string|in:Bottle,Shot',
             'conversion_factor' => 'required|integer|min:1',
             'bar_selling_prices' => 'nullable|array',
-            'additional_units' => 'nullable|array',
+            'bottle_bar_selling_prices' => 'nullable|array',
+            'shots_per_bottle' => [
+                'nullable',
+                'integer',
+                'min:1',
+                Rule::requiredIf(fn () => $request->input('base_unit') === 'Shot' && $request->input('purchase_unit') !== 'Bottle'),
+            ],
         ]);
 
         DB::beginTransaction();
         try {
+            $validated['conversion_factor'] = $this->normalizePurchaseConversionFactor(
+                $validated['purchase_unit'],
+                $validated['base_unit'],
+                (int) $validated['conversion_factor']
+            );
+
             // Calculate cost per base unit
             $totalBaseUnits = $validated['quantity_purchased'] * $validated['conversion_factor'];
             $calculatedBaseUnitCost = $totalBaseUnits > 0 ? $validated['total_purchase_cost'] / $totalBaseUnits : 0;
@@ -334,10 +386,15 @@ class WarehouseStockController extends Controller
             $validated['average_unit_cost'] = $calculatedBaseUnitCost;
 
             // Set default selling price if not provided (use first bar price)
-            if (empty($validated['selling_price']) && !empty($validated['bar_selling_prices'])) {
-                $firstBarPrice = reset($validated['bar_selling_prices']);
-                if ($firstBarPrice > 0) {
-                    $validated['selling_price'] = $firstBarPrice;
+            if (empty($validated['selling_price'])) {
+                $firstBottlePrice = collect($this->filterBottleBarSellingPrices($request->input('bottle_bar_selling_prices', [])))->first();
+                if ($firstBottlePrice > 0) {
+                    $validated['selling_price'] = $firstBottlePrice;
+                } elseif (! empty($validated['bar_selling_prices'])) {
+                    $firstBarPrice = reset($validated['bar_selling_prices']);
+                    if ($firstBarPrice > 0) {
+                        $validated['selling_price'] = $firstBarPrice;
+                    }
                 }
             }
 
@@ -360,124 +417,59 @@ class WarehouseStockController extends Controller
                 ]);
             }
 
-            // Update or create purchase unit
-            $purchaseUnit = $warehouseStock->units()->where('unit_name', $validated['purchase_unit'])->where('is_base_unit', false)->first();
-            if ($purchaseUnit) {
-                $purchaseUnit->update([
-                    'conversion_factor' => $validated['conversion_factor'],
-                    'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
-                ]);
+            // Update or create purchase unit (only when different from base unit)
+            if ($validated['purchase_unit'] !== $validated['base_unit']) {
+                $purchaseUnit = $warehouseStock->units()->where('unit_name', $validated['purchase_unit'])->where('is_base_unit', false)->first();
+                if ($purchaseUnit) {
+                    $purchaseUnit->update([
+                        'conversion_factor' => $validated['conversion_factor'],
+                        'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
+                    ]);
+                } else {
+                    \App\Models\WarehouseUnit::create([
+                        'warehouse_stock_id' => $warehouseStock->id,
+                        'unit_name' => $validated['purchase_unit'],
+                        'conversion_factor' => $validated['conversion_factor'],
+                        'is_base_unit' => false,
+                        'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
+                    ]);
+                }
             } else {
-                \App\Models\WarehouseUnit::create([
-                    'warehouse_stock_id' => $warehouseStock->id,
-                    'unit_name' => $validated['purchase_unit'],
-                    'conversion_factor' => $validated['conversion_factor'],
-                    'is_base_unit' => false,
-                    'purchase_price' => $validated['quantity_purchased'] > 0 ? $validated['total_purchase_cost'] / $validated['quantity_purchased'] : 0,
-                ]);
+                // Remove stale duplicate purchase-unit row when buying in base units
+                $warehouseStock->units()
+                    ->where('is_base_unit', false)
+                    ->where('unit_name', $validated['purchase_unit'])
+                    ->delete();
             }
 
             // Handle bar-specific selling prices
             if ($request->has('bar_selling_prices') && is_array($request->bar_selling_prices)) {
-                foreach ($request->bar_selling_prices as $barId => $sellingPrice) {
-                    if ($sellingPrice > 0) {
-                        $barPrice = $baseUnit->barPrices()->where('bar_id', $barId)->first();
-                        if ($barPrice) {
-                            $barPrice->update(['selling_price' => $sellingPrice]);
-                        } else {
-                            \App\Models\WarehouseUnitBarPrice::create([
-                                'warehouse_unit_id' => $baseUnit->id,
-                                'bar_id' => $barId,
-                                'selling_price' => $sellingPrice,
-                            ]);
-                        }
-                    }
-                }
-            }
-
-            // Handle additional units
-            // First, get all existing additional units for this warehouse stock
-            $existingAdditionalUnits = $warehouseStock->units()->where('is_base_unit', false)->get();
-            $existingUnitIds = [];
-
-            // Process submitted additional units
-            if ($request->has('additional_units') && is_array($request->additional_units)) {
-                foreach ($request->additional_units as $unitData) {
-                    if (empty($unitData['unit_name'])) continue;
-
-                    $conv = isset($unitData['conversion_factor']) ? intval($unitData['conversion_factor']) : 1;
-                    $purchasePrice = $calculatedBaseUnitCost * $conv;
-
-                    // Check if this is an existing unit (has unit_id in data)
-                    if (isset($unitData['unit_id']) && $unitData['unit_id']) {
-                        // Update existing unit
-                        $existingUnit = $existingAdditionalUnits->where('id', $unitData['unit_id'])->first();
-                        if ($existingUnit) {
-                            $existingUnit->update([
-                                'unit_name' => $unitData['unit_name'],
-                                'conversion_factor' => $conv,
-                                'purchase_price' => $purchasePrice,
-                            ]);
-                            $existingUnitIds[] = $existingUnit->id;
-
-                            // Update per-bar prices if provided
-                            if (!empty($unitData['bar_selling_prices']) && is_array($unitData['bar_selling_prices'])) {
-                                foreach ($unitData['bar_selling_prices'] as $barId => $price) {
-                                    if ($price > 0) {
-                                        $barPrice = $existingUnit->barPrices()->where('bar_id', $barId)->first();
-                                        if ($barPrice) {
-                                            $barPrice->update(['selling_price' => $price]);
-                                        } else {
-                                            \App\Models\WarehouseUnitBarPrice::create([
-                                                'warehouse_unit_id' => $existingUnit->id,
-                                                'bar_id' => $barId,
-                                                'selling_price' => $price,
-                                            ]);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                foreach ($this->filterBarSellingPrices($request->bar_selling_prices, $validated['base_unit']) as $barId => $sellingPrice) {
+                    $barPrice = $baseUnit->barPrices()->where('bar_id', $barId)->first();
+                    if ($barPrice) {
+                        $barPrice->update(['selling_price' => $sellingPrice]);
                     } else {
-                        // Create new additional unit
-                        $newUnit = \App\Models\WarehouseUnit::create([
-                            'warehouse_stock_id' => $warehouseStock->id,
-                            'unit_name' => $unitData['unit_name'],
-                            'conversion_factor' => $conv,
-                            'is_base_unit' => false,
-                            'purchase_price' => $purchasePrice,
+                        \App\Models\WarehouseUnitBarPrice::create([
+                            'warehouse_unit_id' => $baseUnit->id,
+                            'bar_id' => $barId,
+                            'selling_price' => $sellingPrice,
                         ]);
-                        $existingUnitIds[] = $newUnit->id;
-
-                        // Create per-bar prices if provided
-                        if (!empty($unitData['bar_selling_prices']) && is_array($unitData['bar_selling_prices'])) {
-                            foreach ($unitData['bar_selling_prices'] as $barId => $price) {
-                                if ($price > 0) {
-                                    try {
-                                        \App\Models\WarehouseUnitBarPrice::create([
-                                            'warehouse_unit_id' => $newUnit->id,
-                                            'bar_id' => $barId,
-                                            'selling_price' => $price,
-                                        ]);
-                                    } catch (\Exception $e) {
-                                        \Log::warning('Failed to create warehouse unit bar price', ['error' => $e->getMessage()]);
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
 
-            // Delete additional units that were not submitted (removed by user)
-            foreach ($existingAdditionalUnits as $existingUnit) {
-                if (!in_array($existingUnit->id, $existingUnitIds)) {
-                    // Delete bar prices first
-                    $existingUnit->barPrices()->delete();
-                    // Then delete the unit
-                    $existingUnit->delete();
-                }
-            }
+            $this->removeUnsupportedBarPrices($baseUnit, $validated['base_unit']);
+
+            $this->syncBottleSellingUnit(
+                $warehouseStock,
+                $validated['base_unit'],
+                $calculatedBaseUnitCost,
+                $this->filterBottleBarSellingPrices($request->input('bottle_bar_selling_prices', [])),
+                $this->resolveShotsPerBottle($request, $validated)
+            );
+
+            $this->removeLegacySellingUnits($warehouseStock);
+            $this->syncLinkedItemProductUnits($warehouseStock);
 
             DB::commit();
             return redirect()->route('warehouse.index')
@@ -537,18 +529,15 @@ class WarehouseStockController extends Controller
      */
     public function transferRequests(): View
     {
-        $pendingRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'items.warehouseStock', 'items.item'])
-            ->where('status', 'pending')
+        $allRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'approvedBy', 'items.warehouseStock.units', 'items.item'])
+            ->orderByRaw("CASE WHEN status = 'pending' THEN 0 ELSE 1 END")
             ->orderBy('requested_at', 'desc')
             ->get();
 
-        $completedRequests = \App\Models\WarehouseTransferRequest::with(['bar', 'requestedBy', 'approvedBy', 'items.warehouseStock', 'items.item'])
-            ->whereIn('status', ['approved', 'partially_approved', 'rejected'])
-            ->orderBy('approved_at', 'desc')
-            ->take(50)
-            ->get();
+        $pendingRequests = $allRequests->where('status', 'pending')->values();
+        $completedRequests = $allRequests->whereIn('status', ['approved', 'partially_approved', 'rejected'])->values();
 
-        return view('warehouse.transfer-requests', compact('pendingRequests', 'completedRequests'));
+        return view('warehouse.transfer-requests', compact('pendingRequests', 'completedRequests', 'allRequests'));
     }
 
     /**
@@ -571,6 +560,7 @@ class WarehouseStockController extends Controller
         DB::beginTransaction();
         
         try {
+            $bar = Bar::findOrFail($transferRequest->bar_id);
             $totalApproved = 0;
             
             foreach ($request->items as $itemData) {
@@ -579,6 +569,10 @@ class WarehouseStockController extends Controller
                 $transferItem = \App\Models\WarehouseTransferRequestItem::findOrFail($itemData['id']);
                 $warehouseStock = $transferItem->warehouseStock;
                 $quantityApproved = $itemData['quantity_approved'];
+
+                if ($quantityApproved > 0 && $transferItem->unit_name && ! $bar->allowsWarehouseTransferUnit($transferItem->unit_name)) {
+                    throw new \Exception("Unit \"{$transferItem->unit_name}\" is not allowed for {$bar->name}. Only Bar B can receive Shot units.");
+                }
                 
                 \Log::info('Transfer item found', [
                     'warehouse_stock_id' => $warehouseStock->id,
@@ -611,151 +605,10 @@ class WarehouseStockController extends Controller
                         'quantity' => -$baseUnitsApproved,
                         'unit_cost' => $warehouseStock->purchase_price,
                         'total_cost' => $baseUnitsApproved * $warehouseStock->purchase_price,
-                        'notes' => "Transfer to bar: " . ($transferRequest->bar->name ?? 'Unknown'),
+                        'destination_bar_id' => $transferRequest->bar_id,
+                        'notes' => 'Transfer to bar: '.($transferRequest->bar->name ?? 'Unknown'),
                         'transaction_date' => now(),
                     ]);
-                    
-                    // Increase director/bar stock for the corresponding item
-                    // Use the item_id from the transfer request item
-                    $item = \App\Models\Item::find($transferItem->item_id);
-                    
-                    \Log::info('Item lookup result', [
-                        'transfer_item_id' => $transferItem->id,
-                        'transfer_item_item_id' => $transferItem->item_id,
-                        'warehouse_stock_item_name' => $warehouseStock->item_name,
-                        'item_found' => $item !== null,
-                        'item_id' => $item?->id,
-                        'item_name' => $item?->name,
-                    ]);
-                    
-                    if ($item) {
-                        $item->increment('director_stock', $baseUnitsApproved);
-                        
-                        // Create ledger entry for transfer (wrap in try-catch in case table doesn't exist)
-                        try {
-                            $item->addLedgerEntry([
-                                'bar_id' => $transferRequest->bar_id,
-                                'action_type' => 'transfer_in',
-                                'quantity' => $baseUnitsApproved,
-                                'unit_cost' => $warehouseStock->purchase_price,
-                                'total_cost' => $baseUnitsApproved * $warehouseStock->purchase_price,
-                                'balance_after' => $item->director_stock,
-                                'reference_type' => 'warehouse_transfer',
-                                'reference_id' => $transferRequest->id,
-                                'transaction_date' => now(),
-                            ]);
-                        } catch (\Exception $ledgerError) {
-                            \Log::warning('Ledger entry failed (table may not exist)', [
-                                'error' => $ledgerError->getMessage(),
-                            ]);
-                            // Continue processing even if ledger fails
-                        }
-
-                        // Ensure the transferred quantity is reflected in today's bar stock entry as well.
-                        \Log::info('Transfer approval - Creating stock entry', [
-                            'bar_id' => $transferRequest->bar_id,
-                            'item_id' => $item->id,
-                            'item_name' => $item->name,
-                            'quantity' => $baseUnitsApproved,
-                        ]);
-
-                        $todayEntry = \App\Models\DailyStockEntry::firstOrCreate([
-                            'bar_id' => $transferRequest->bar_id,
-                            'date' => now()->format('Y-m-d'),
-                        ], [
-                            'user_id' => auth()->id(),
-                        ]);
-
-                        \Log::info('DailyStockEntry created/found', [
-                            'id' => $todayEntry->id,
-                            'bar_id' => $todayEntry->bar_id,
-                            'date' => $todayEntry->date,
-                        ]);
-
-                        $stockEntryItem = $todayEntry->stockEntryItems()
-                            ->where('item_id', $item->id)
-                            ->first();
-
-                        $barPrice = \App\Models\BarItemPrice::where('bar_id', $transferRequest->bar_id)
-                            ->where('item_id', $item->id)
-                            ->first()?->price ?? $item->price;
-
-                        \Log::info('Bar price resolved', ['price' => $barPrice]);
-
-                        if ($stockEntryItem) {
-                            // Determine purchase price based on warehouse unit or warehouse stock
-                            $unitPurchasePrice = $warehouseStock->purchase_price;
-                            
-                            // Try to get unit-specific purchase price if unit_name is available
-                            if ($transferItem->unit_name) {
-                                $warehouseUnit = $warehouseStock->units()
-                                    ->where('unit_name', $transferItem->unit_name)
-                                    ->first();
-                                if ($warehouseUnit && $warehouseUnit->purchase_price) {
-                                    $unitPurchasePrice = $warehouseUnit->purchase_price;
-                                }
-                            }
-
-                            $stockEntryItem->ordered_stock += $baseUnitsApproved;
-                            $stockEntryItem->total_stock += $baseUnitsApproved;
-                            $stockEntryItem->closing_stock += $baseUnitsApproved;
-                            $stockEntryItem->price = $barPrice;
-                            $stockEntryItem->purchase_price = $unitPurchasePrice;
-                            $stockEntryItem->save();
-                            
-                            \Log::info('StockEntryItem updated', [
-                                'id' => $stockEntryItem->id,
-                                'closing_stock' => $stockEntryItem->closing_stock,
-                                'purchase_price' => $unitPurchasePrice,
-                            ]);
-                        } else {
-                            // Refresh to get the updated director_stock after increment
-                            $item->refresh();
-                            $openingStock = max(0, $item->director_stock - $baseUnitsApproved);
-                            $totalStock = $openingStock + $baseUnitsApproved;
-
-                            // Determine purchase price based on warehouse unit or warehouse stock
-                            $unitPurchasePrice = $warehouseStock->purchase_price;
-                            
-                            // Try to get unit-specific purchase price if unit_name is available
-                            if ($transferItem->unit_name) {
-                                $warehouseUnit = $warehouseStock->units()
-                                    ->where('unit_name', $transferItem->unit_name)
-                                    ->first();
-                                if ($warehouseUnit && $warehouseUnit->purchase_price) {
-                                    $unitPurchasePrice = $warehouseUnit->purchase_price;
-                                }
-                            }
-
-                            \Log::info('Setting purchase price for StockEntryItem', [
-                                'warehouse_stock_purchase_price' => $warehouseStock->purchase_price,
-                                'unit_name' => $transferItem->unit_name,
-                                'final_purchase_price' => $unitPurchasePrice,
-                            ]);
-
-                            $createdItem = \App\Models\StockEntryItem::create([
-                                'stock_entry_id' => $todayEntry->id,
-                                'item_id' => $item->id,
-                                'opening_stock' => $openingStock,
-                                'ordered_stock' => $baseUnitsApproved,
-                                'total_stock' => $totalStock,
-                                'closing_stock' => $totalStock,
-                                'sold_quantity' => 0,
-                                'sales_amount' => 0,
-                                'price' => $barPrice,
-                                'purchase_price' => $unitPurchasePrice,
-                                'expiry_date' => null,
-                            ]);
-                            
-                            \Log::info('StockEntryItem created', [
-                                'id' => $createdItem->id,
-                                'stock_entry_id' => $todayEntry->id,
-                                'item_id' => $item->id,
-                                'closing_stock' => $totalStock,
-                                'purchase_price' => $unitPurchasePrice,
-                            ]);
-                        }
-                    }
                 }
             }
             
@@ -766,6 +619,14 @@ class WarehouseStockController extends Controller
                     'approved_by' => auth()->id(),
                     'approved_at' => now(),
                     'notes' => $request->notes,
+                ]);
+
+                \App\Models\ActivityLog::log([
+                    'action' => 'warehouse_transfer_approved',
+                    'description' => "Approved warehouse transfer request #{$transferRequest->id} for bar: ".($transferRequest->bar->name ?? 'Unknown'),
+                    'subject_type' => \App\Models\WarehouseTransferRequest::class,
+                    'subject_id' => $transferRequest->id,
+                    'new_values' => ['bar' => $transferRequest->bar->name ?? 'Unknown', 'approved_items' => $totalApproved],
                 ]);
             } else {
                 $transferRequest->update([
@@ -820,6 +681,143 @@ class WarehouseStockController extends Controller
     }
 
     /**
+     * Revert an approved warehouse transfer â€” return stock to warehouse and deduct from bar.
+     */
+    public function revertTransfer(Request $request, \App\Models\WarehouseTransferRequest $transferRequest): RedirectResponse
+    {
+        if (! $transferRequest->isApproved()) {
+            return redirect()->back()->with('error', 'Only approved transfers can be reverted.');
+        }
+
+        $request->validate([
+            'rejection_reason' => 'nullable|string|max:500',
+        ]);
+
+        DB::beginTransaction();
+
+        try {
+            $transferRequest->load(['bar', 'items.warehouseStock', 'items.item']);
+
+            foreach ($transferRequest->items as $transferItem) {
+                $quantityApproved = (int) $transferItem->quantity_approved;
+                if ($quantityApproved <= 0) {
+                    continue;
+                }
+
+                $baseUnits = $quantityApproved * ($transferItem->conversion_factor ?? 1);
+                $warehouseStock = $transferItem->warehouseStock;
+                $item = $transferItem->item;
+
+                $warehouseStock->increment('quantity', $baseUnits);
+                $warehouseStock->addTransaction([
+                    'transaction_type' => 'transfer',
+                    'quantity' => $baseUnits,
+                    'unit_cost' => $warehouseStock->purchase_price,
+                    'total_cost' => $baseUnits * $warehouseStock->purchase_price,
+                    'destination_bar_id' => $transferRequest->bar_id,
+                    'notes' => 'Revert transfer from bar: '.($transferRequest->bar->name ?? 'Unknown'),
+                    'transaction_date' => now(),
+                ]);
+
+                if ($item) {
+                    $newDirectorStock = max(0, (float) $item->director_stock - $baseUnits);
+                    $item->update(['director_stock' => $newDirectorStock]);
+
+                    try {
+                        $item->addLedgerEntry([
+                            'bar_id' => $transferRequest->bar_id,
+                            'action_type' => 'transfer_out',
+                            'quantity' => -$baseUnits,
+                            'unit_cost' => $warehouseStock->purchase_price,
+                            'total_cost' => $baseUnits * $warehouseStock->purchase_price,
+                            'balance_after' => $newDirectorStock,
+                            'reference_type' => 'warehouse_transfer_revert',
+                            'reference_id' => $transferRequest->id,
+                            'notes' => 'Transfer reverted',
+                            'transaction_date' => now(),
+                        ]);
+                    } catch (\Exception $ledgerError) {
+                        \Log::warning('Ledger revert entry failed', ['error' => $ledgerError->getMessage()]);
+                    }
+
+                    $this->deductBarStockAfterRevert($transferRequest->bar_id, $item->id, $baseUnits);
+                }
+
+                $transferItem->update(['quantity_approved' => 0]);
+            }
+
+            $transferRequest->update([
+                'status' => 'rejected',
+                'approved_by' => auth()->id(),
+                'approved_at' => now(),
+                'rejection_reason' => $request->input('rejection_reason', 'Transfer reverted / disapproved'),
+            ]);
+
+            DB::commit();
+
+            return redirect()->back()->with('success', 'Transfer reverted. Stock returned to warehouse and deducted from bar.');
+        } catch (\Exception $e) {
+            DB::rollback();
+
+            return redirect()->back()->with('error', 'Error reverting transfer: '.$e->getMessage());
+        }
+    }
+
+    /**
+     * Quick-approve all requested quantities on a pending transfer.
+     */
+    public function quickApproveTransfer(\App\Models\WarehouseTransferRequest $transferRequest): RedirectResponse
+    {
+        if (! $transferRequest->isPending()) {
+            return redirect()->back()->with('error', 'Only pending transfers can be approved.');
+        }
+
+        $items = $transferRequest->items->map(fn ($item) => [
+            'id' => $item->id,
+            'quantity_approved' => $item->quantity_requested,
+        ])->values()->all();
+
+        return $this->approveTransfer(
+            request()->merge(['items' => $items, 'notes' => 'Quick approved']),
+            $transferRequest
+        );
+    }
+
+    private function deductBarStockAfterRevert(int $barId, int $itemId, float $baseUnits): void
+    {
+        $entry = \App\Models\Sale::where('bar_id', $barId)
+            ->where('date', now()->format('Y-m-d'))
+            ->first();
+
+        if (! $entry) {
+            $entry = \App\Models\Sale::where('bar_id', $barId)
+                ->whereHas('stockEntryItems', fn ($q) => $q->where('item_id', $itemId))
+                ->orderByDesc('date')
+                ->first();
+        }
+
+        if (! $entry) {
+            return;
+        }
+
+        $stockItem = $entry->stockEntryItems()->where('item_id', $itemId)->first();
+        if (! $stockItem) {
+            return;
+        }
+
+        $stockItem->ordered_stock = max(0, (float) $stockItem->ordered_stock - $baseUnits);
+        $stockItem->total_stock = max(0, (float) $stockItem->total_stock - $baseUnits);
+        $stockItem->closing_stock = max(0, (float) $stockItem->closing_stock - $baseUnits);
+
+        if ((float) $stockItem->opening_stock > (float) $stockItem->closing_stock + (float) $stockItem->sold_quantity) {
+            $excess = (float) $stockItem->opening_stock - ((float) $stockItem->closing_stock + (float) $stockItem->sold_quantity);
+            $stockItem->opening_stock = max(0, (float) $stockItem->opening_stock - min($excess, $baseUnits));
+        }
+
+        $stockItem->save();
+    }
+
+    /**
      * API: Get available warehouse items with units and branch-specific prices
      */
     public function getAvailableItems(Request $request): \Illuminate\Http\JsonResponse
@@ -829,10 +827,12 @@ class WarehouseStockController extends Controller
             return response()->json(['error' => 'Bar ID is required'], 400);
         }
 
+        $bar = Bar::findOrFail($barId);
+
         // Fetch all warehouse stocks with units and their prices for the specified bar
         $stocks = WarehouseStock::with(['units'])->get();
         
-        $items = $stocks->map(function ($stock) use ($barId) {
+        $items = $stocks->map(function ($stock) use ($barId, $bar) {
             // Find base unit and its bar price
             $baseUnit = $stock->units->firstWhere('is_base_unit', true);
             $basePrice = $stock->selling_price; // default fallback
@@ -846,21 +846,32 @@ class WarehouseStockController extends Controller
                 }
             }
 
+            $allowedUnits = $this->filterUnitsForBarRequest($stock, $bar);
+            $availability = $stock->getRequestAvailabilityForBar($bar);
+
             // Map units and calculate selling price based on conversion factor relative to base unit
-            $units = $stock->units->map(function ($unit) use ($basePrice) {
+            $units = $allowedUnits->map(function ($unit) use ($basePrice, $availability) {
+                $maxInUnit = $unit->conversion_factor > 0
+                    ? (int) floor($availability['available_quantity_base'] / $unit->conversion_factor)
+                    : (int) $availability['available_quantity_base'];
+
                 return [
                     'id' => $unit->id,
                     'unit_name' => $unit->unit_name,
                     'conversion_factor' => $unit->conversion_factor,
                     'is_base_unit' => $unit->is_base_unit,
                     'price' => (float)($basePrice * $unit->conversion_factor),
+                    'max_quantity' => $maxInUnit,
                 ];
-            });
+            })->values();
 
             return [
                 'id' => $stock->id,
                 'item_name' => $stock->item_name,
-                'available_quantity' => $stock->quantity, // in base units
+                'available_quantity' => $availability['available_quantity'],
+                'available_quantity_base' => $availability['available_quantity_base'],
+                'stock_unit' => $availability['stock_unit'],
+                'is_out_of_stock' => $availability['is_out_of_stock'],
                 'purchase_price' => $stock->purchase_price,
                 'units' => $units,
             ];
@@ -868,4 +879,207 @@ class WarehouseStockController extends Controller
 
         return response()->json($items);
     }
+
+    private function filterUnitsForBarRequest(WarehouseStock $stock, Bar $bar)
+    {
+        return $stock->units->filter(function ($unit) use ($bar) {
+            return $bar->allowsWarehouseTransferUnit($unit->unit_name);
+        })->values();
+    }
+
+    /**
+     * When purchase unit matches base unit, conversion is always 1:1.
+     */
+    private function normalizePurchaseConversionFactor(string $purchaseUnit, string $baseUnit, int $conversionFactor): int
+    {
+        if ($purchaseUnit === $baseUnit) {
+            return 1;
+        }
+
+        return max(1, $conversionFactor);
+    }
+
+    private function filterBarSellingPrices(array $barSellingPrices, string $baseUnit): array
+    {
+        $bars = Bar::listed()->get()->keyBy('id');
+
+        return collect($barSellingPrices)
+            ->filter(function ($price, $barId) use ($baseUnit, $bars) {
+                $bar = $bars->get($barId);
+
+                return $bar
+                    && $bar->supportsWarehouseBaseUnit($baseUnit)
+                    && is_numeric($price)
+                    && $price > 0;
+            })
+            ->all();
+    }
+
+    private function removeUnsupportedBarPrices(\App\Models\WarehouseUnit $unit, string $baseUnit): void
+    {
+        $unsupportedBarIds = Bar::listed()
+            ->get()
+            ->filter(fn (Bar $bar) => ! $bar->supportsWarehouseBaseUnit($baseUnit))
+            ->pluck('id');
+
+        if ($unsupportedBarIds->isNotEmpty()) {
+            $unit->barPrices()->whereIn('bar_id', $unsupportedBarIds)->delete();
+        }
+    }
+
+    private function resolveShotsPerBottle(Request $request, array $validated): int
+    {
+        if (($validated['base_unit'] ?? '') !== 'Shot') {
+            return 1;
+        }
+
+        if (($validated['purchase_unit'] ?? '') === 'Bottle') {
+            return max(1, (int) $validated['conversion_factor']);
+        }
+
+        return max(1, (int) ($request->input('shots_per_bottle') ?? 25));
+    }
+
+    private function syncBottleSellingUnit(
+        WarehouseStock $warehouseStock,
+        string $baseUnit,
+        float $baseUnitCost,
+        array $bottleBarPrices,
+        int $shotsPerBottle
+    ): void {
+        if ($baseUnit !== 'Shot') {
+            $this->removeBottleSellingUnit($warehouseStock);
+
+            return;
+        }
+
+        $shotsPerBottle = max(1, $shotsPerBottle);
+        $bottlePurchasePrice = $baseUnitCost * $shotsPerBottle;
+
+        $warehouseStock->refresh();
+        $warehouseStock->load('units.barPrices');
+
+        $bottleUnit = $warehouseStock->getBottleSellingUnit();
+
+        if ($bottleUnit) {
+            $bottleUnit->update([
+                'conversion_factor' => $shotsPerBottle,
+                'purchase_price' => $bottlePurchasePrice,
+            ]);
+        } else {
+            $bottleUnit = \App\Models\WarehouseUnit::create([
+                'warehouse_stock_id' => $warehouseStock->id,
+                'unit_name' => 'Bottle',
+                'conversion_factor' => $shotsPerBottle,
+                'is_base_unit' => false,
+                'purchase_price' => $bottlePurchasePrice,
+            ]);
+        }
+
+        $submittedBarIds = array_map('intval', array_keys($bottleBarPrices));
+
+        foreach ($bottleBarPrices as $barId => $price) {
+            $barPrice = $bottleUnit->barPrices()->where('bar_id', $barId)->first();
+            if ($barPrice) {
+                $barPrice->update(['selling_price' => $price]);
+            } else {
+                \App\Models\WarehouseUnitBarPrice::create([
+                    'warehouse_unit_id' => $bottleUnit->id,
+                    'bar_id' => $barId,
+                    'selling_price' => $price,
+                ]);
+            }
+        }
+
+        if ($submittedBarIds !== []) {
+            $bottleUnit->barPrices()
+                ->whereNotIn('bar_id', $submittedBarIds)
+                ->delete();
+        }
+    }
+
+    private function filterBottleBarSellingPrices(array $prices): array
+    {
+        $bars = Bar::listed()->get()->keyBy('id');
+
+        return collect($prices)
+            ->filter(function ($price, $barId) use ($bars) {
+                return $bars->has((int) $barId)
+                    && is_numeric($price)
+                    && (float) $price > 0;
+            })
+            ->map(fn ($price) => (float) $price)
+            ->all();
+    }
+
+    private function removeBottleSellingUnit(WarehouseStock $warehouseStock): void
+    {
+        if ($warehouseStock->purchase_unit === 'Bottle') {
+            return;
+        }
+
+        $warehouseStock->units()
+            ->where('unit_name', 'Bottle')
+            ->where('is_base_unit', false)
+            ->each(function (\App\Models\WarehouseUnit $unit) {
+                $unit->barPrices()->delete();
+                $unit->delete();
+            });
+    }
+
+    private function removeLegacySellingUnits(WarehouseStock $warehouseStock): void
+    {
+        $keepUnits = array_values(array_unique(array_filter([
+            $warehouseStock->purchase_unit,
+            'Bottle',
+            'Shot',
+        ])));
+
+        $warehouseStock->units()
+            ->where('is_base_unit', false)
+            ->whereNotIn('unit_name', $keepUnits)
+            ->each(function (\App\Models\WarehouseUnit $unit) {
+                $unit->barPrices()->delete();
+                $unit->delete();
+            });
+    }
+
+    private function syncLinkedItemProductUnits(WarehouseStock $warehouseStock): void
+    {
+        $item = Item::where('name', $warehouseStock->item_name)->first();
+        if (! $item) {
+            return;
+        }
+
+        $warehouseStock->load('units.barPrices');
+
+        ProductUnitPrice::where('item_id', $item->id)->delete();
+        ProductUnit::where('item_id', $item->id)->delete();
+
+        foreach ($warehouseStock->units as $wUnit) {
+            if (! in_array($wUnit->unit_name, ['Bottle', 'Shot'], true) && ! $wUnit->is_base_unit) {
+                continue;
+            }
+
+            ProductUnit::create([
+                'item_id' => $item->id,
+                'unit_name' => $wUnit->unit_name,
+                'conversion_factor' => $wUnit->conversion_factor,
+                'is_base_unit' => $wUnit->is_base_unit,
+            ]);
+
+            $sellingPrice = $wUnit->barPrices->first()?->selling_price
+                ?? ($warehouseStock->selling_price * ($wUnit->is_base_unit ? 1 : $wUnit->conversion_factor));
+
+            if ($sellingPrice > 0) {
+                ProductUnitPrice::create([
+                    'item_id' => $item->id,
+                    'unit_name' => $wUnit->unit_name,
+                    'selling_price' => $sellingPrice,
+                    'purchase_price' => $wUnit->purchase_price,
+                ]);
+            }
+        }
+    }
 }
+

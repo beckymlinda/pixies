@@ -28,7 +28,7 @@ class CashReconciliation extends Model
 
     public function stockEntry()
     {
-        return $this->belongsTo(DailyStockEntry::class);
+        return $this->belongsTo(Sale::class);
     }
 
     public function verifier()
@@ -59,10 +59,10 @@ class CashReconciliation extends Model
     public function getStatusIcon()
     {
         return match($this->status) {
-            'matched' => '✅',
-            'shortage' => '❌',
-            'excess' => '⚠️',
-            default => '❓'
+            'matched' => 'âœ…',
+            'shortage' => 'âŒ',
+            'excess' => 'âš ï¸',
+            default => 'â“'
         };
     }
 
@@ -106,7 +106,7 @@ class CashReconciliation extends Model
 
     public static function calculateExpectedCash($stockEntryId)
     {
-        $stockEntry = DailyStockEntry::find($stockEntryId);
+        $stockEntry = Sale::find($stockEntryId);
         
         if (!$stockEntry) {
             return 0;
@@ -144,7 +144,7 @@ class CashReconciliation extends Model
 
     public static function calculateExpectedCollected($stockEntryId)
     {
-        $stockEntry = DailyStockEntry::find($stockEntryId);
+        $stockEntry = Sale::find($stockEntryId);
 
         if (!$stockEntry) {
             return 0;
@@ -161,7 +161,7 @@ class CashReconciliation extends Model
 
     public static function createReconciliation($stockEntryId, $cashCounted, $verifiedBy, $notes = null, $electronicCounted = null)
     {
-        $stockEntry = DailyStockEntry::find($stockEntryId);
+        $stockEntry = Sale::find($stockEntryId);
         if (!$stockEntry) {
             throw new \Exception('Stock entry not found');
         }
@@ -174,9 +174,11 @@ class CashReconciliation extends Model
         // Total sales from stock items
         $totalSales = $stockEntry->stockEntryItems()->sum('sales_amount');
 
-        // Electronic payments: prefer daily report payments if present
+        // Electronic payments: prefer daily report payments if present.
+        // Exclude the "Cash" payment row here because the physical cash count
+        // ($cashCounted) already represents cash; including the row would double count.
         if ($dailyReport) {
-            $electronicTotal = $dailyReport->payments()->sum('amount');
+            $electronicTotal = $dailyReport->payments()->where('payment_method', '!=', 'Cash')->sum('amount');
         } else {
             $electronicTotal = $stockEntry->payments()->sum('amount');
         }
@@ -236,3 +238,4 @@ class CashReconciliation extends Model
         );
     }
 }
+

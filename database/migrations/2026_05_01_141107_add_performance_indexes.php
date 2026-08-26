@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         // Daily Stock Entries indexes
-        Schema::table('daily_stock_entries', function (Blueprint $table) {
+        Schema::table('sales', function (Blueprint $table) {
             $table->index(['bar_id', 'date'], 'stock_entries_bar_date_index');
             $table->index('date', 'stock_entries_date_index');
             $table->index('user_id', 'stock_entries_user_index');
@@ -93,10 +93,11 @@ return new class extends Migration
             $table->dropIndex('stock_items_sold_index');
         });
 
-        Schema::table('daily_stock_entries', function (Blueprint $table) {
+        Schema::table('sales', function (Blueprint $table) {
             $table->dropIndex('stock_entries_bar_date_index');
             $table->dropIndex('stock_entries_date_index');
             $table->dropIndex('stock_entries_user_index');
         });
     }
 };
+

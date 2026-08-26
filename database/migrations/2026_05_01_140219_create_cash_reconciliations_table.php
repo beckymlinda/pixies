@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('cash_reconciliations', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('stock_entry_id')->constrained('daily_stock_entries')->onDelete('cascade');
+            $table->foreignId('stock_entry_id')->constrained('sales')->onDelete('cascade');
             $table->decimal('expected_cash', 10, 2);
             $table->decimal('cash_counted', 10, 2);
             $table->decimal('difference', 10, 2);
@@ -35,3 +35,4 @@ return new class extends Migration
         Schema::dropIfExists('cash_reconciliations');
     }
 };
+

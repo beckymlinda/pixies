@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -19,7 +19,7 @@ return new class extends Migration
             $table->foreignId('stock_entry_id')->nullable()->change();
             
             // Re-add the foreign key constraint with nullable
-            $table->foreign('stock_entry_id')->references('id')->on('daily_stock_entries')->onDelete('set null');
+            $table->foreign('stock_entry_id')->references('id')->on('sales')->onDelete('set null');
         });
     }
 
@@ -36,7 +36,8 @@ return new class extends Migration
             $table->foreignId('stock_entry_id')->nullable(false)->change();
             
             // Re-add the original foreign key constraint
-            $table->foreign('stock_entry_id')->references('id')->on('daily_stock_entries')->onDelete('cascade');
+            $table->foreign('stock_entry_id')->references('id')->on('sales')->onDelete('cascade');
         });
     }
 };
+

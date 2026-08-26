@@ -10,8 +10,8 @@
                 <div class="card-body">
                     <div class="d-flex align-items-center justify-content-between">
                         <div>
-                            <h1 class="h2 mb-2">✏️ Edit Stock Entry</h1>
-                            <p class="text-muted mb-0">Update today's stock sheet with opening stock, orders, and closing stock.</p>
+                            <h1 class="h2 mb-2">✏️ Edit Sale Record</h1>
+                            <p class="text-muted mb-0">Update today's sales record with opening stock, orders, and closing stock.</p>
                             @if(auth()->user()->bar)
                                 <div class="d-flex align-items-center mt-3 gap-2">
                                     <span class="badge bg-primary px-3 py-2">
@@ -33,15 +33,15 @@
         </div>
     </div>
 
-    <!-- Stock Entry Form -->
+    <!-- Sale Record Form -->
     <div class="row">
         <div class="col-12">
             <div class="card pixies-card stock-entry-card">
                 <div class="card-header bg-gradient text-white" style="background: linear-gradient(135deg, var(--pixies-primary), var(--pixies-primary-dark)) !important;">
                     <h3 class="h4 mb-1">
-                        <i class="bi bi-clipboard-data me-2"></i> Edit Stock Entry Form
+                        <i class="bi bi-clipboard-data me-2"></i> Edit Sale Record Form
                     </h3>
-                    <small class="opacity-75">Update your inventory data below - track every item carefully</small>
+                    <small class="opacity-75">Update your sales data below - track every item carefully</small>
                 </div>
                 <div class="card-body">
                     <form method="POST" action="{{ route('stock-entries.update', $stockEntry) }}" class="needs-validation" novalidate>
@@ -75,10 +75,10 @@
                             </div>
                         </div>
 
-                        <!-- Stock Entry Items Table -->
+                        <!-- Sale Record Items Table -->
                         <div class="mb-4">
                             <h5 class="fw-semibold mb-3">
-                                <i class="bi bi-box-seam me-2"></i> Stock Items
+                                <i class="bi bi-box-seam me-2"></i> Sale Items
                             </h5>
                             <div class="table-responsive">
                                 <table class="table table-hover" id="stockItemsTable">
@@ -146,7 +146,7 @@
                                 <i class="bi bi-x-circle me-1"></i> Cancel
                             </a>
                             <button type="submit" class="btn pixies-btn-primary">
-                                <i class="bi bi-check-circle me-1"></i> Update Stock Entry
+                                <i class="bi bi-check-circle me-1"></i> Update Sale Record
                             </button>
                         </div>
                     </form>
@@ -422,7 +422,7 @@ input.price[readonly] {
 }
 </style>
 <script>
-// Stock Entry Form JavaScript
+// Sale Record Form JavaScript
 let itemIndex = {{ $stockEntry->stockEntryItems->count() }};
 
 function addNewItem() {

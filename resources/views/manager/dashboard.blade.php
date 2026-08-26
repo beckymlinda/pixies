@@ -85,7 +85,7 @@
                                 <i class="bi bi-clipboard-check fs-4"></i>
                             </div>
                             <h3 class="h5 fw-bold mb-3 text-dark">Stock Oversight</h3>
-                            <p class="text-secondary small mb-4">Review and audit all daily stock entries submitted by sellers across the network.</p>
+                            <p class="text-secondary small mb-4">Review and audit all daily sales records submitted by sellers across the network.</p>
                             <a href="{{ route('stock-entries.index') }}" class="btn btn-outline-dark w-100 rounded-pill py-2">
                                 Review Entries
                             </a>

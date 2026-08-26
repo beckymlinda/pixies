@@ -76,8 +76,8 @@
             <a href="{{ route('credit-customers.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
                 <i class="bi bi-plus-lg me-2"></i>New Entry
             </a>
-            <a href="{{ route('credit-customers.export') }}" class="btn btn-light border rounded-pill px-4 shadow-sm bg-white">
-                <i class="bi bi-download me-2"></i>Export
+            <a href="{{ route('credit-customers.export', request()->only(['search', 'filter'])) }}" class="btn btn-light border rounded-pill px-4 shadow-sm bg-white">
+                <i class="bi bi-download me-2"></i>Export CSV
             </a>
         </div>
     </div>
@@ -146,7 +146,7 @@
                     <thead>
                         <tr>
                             <th>Customer</th>
-                            @if(auth()->user()->isDirector())
+                            @if(auth()->user()->isAdmin())
                                 <th>Bar</th>
                             @endif
                             <th>Phone</th>
@@ -166,7 +166,7 @@
                                         <span class="badge bg-danger bg-opacity-10 text-danger rounded-pill px-2 py-1" style="font-size: 0.6rem;">High Balance</span>
                                     @endif
                                 </td>
-                                @if(auth()->user()->isDirector())
+                                @if(auth()->user()->isAdmin())
                                     <td data-label="Bar">
                                         <span class="badge bg-secondary bg-opacity-10 text-secondary rounded-pill px-2 py-1" style="font-size: 0.75rem;">
                                             {{ $customer->bar->name ?? 'Global' }}

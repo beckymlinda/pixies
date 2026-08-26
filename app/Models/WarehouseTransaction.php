@@ -9,6 +9,7 @@ class WarehouseTransaction extends Model
 {
     protected $fillable = [
         'warehouse_stock_id',
+        'destination_bar_id',
         'transaction_type',
         'quantity',
         'unit_cost',
@@ -32,6 +33,11 @@ class WarehouseTransaction extends Model
     public function warehouseStock(): BelongsTo
     {
         return $this->belongsTo(WarehouseStock::class);
+    }
+
+    public function destinationBar(): BelongsTo
+    {
+        return $this->belongsTo(Bar::class, 'destination_bar_id');
     }
 
     /**

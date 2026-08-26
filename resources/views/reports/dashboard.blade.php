@@ -113,6 +113,9 @@
                                 <button type="submit" class="btn btn-light btn-sm">
                                     <i class="bi bi-funnel"></i> Apply
                                 </button>
+                                <a href="{{ route('reports.export', request()->query()) }}" class="btn btn-outline-light btn-sm">
+                                    <i class="bi bi-download"></i> Export CSV
+                                </a>
                             </form>
                         </div>
                     </div>
@@ -137,7 +140,7 @@
                                 <span class="small opacity-50">MWK</span> {{ number_format($summary['totalSales']) }}
                             </div>
                             <div class="text-dark small fw-bold">Total Sales</div>
-                            <small class="text-muted">Source: Stock entries only</small>
+                            <small class="text-muted">Source: Sales records only</small>
                         </div>
                     </div>
                 </div>
@@ -200,8 +203,8 @@
                             <div class="text-danger fs-3 fw-bold">
                                 <span class="small opacity-50">MWK</span> {{ number_format($summary['totalExpenses']) }}
                             </div>
-                            <div class="text-dark small fw-bold">Total Expenses</div>
-                            <small class="text-muted">Operating costs</small>
+                            <div class="text-dark small fw-bold">Bar Shift Expenses</div>
+                            <small class="text-muted">Deducted from till (excludes mgmt overhead)</small>
                         </div>
                     </div>
                 </div>
@@ -235,16 +238,22 @@
                                 {{ $summary['isAccurate'] ? 'Financials Accurate' : 'Data Inconsistency' }}
                             </div>
                             <div class="text-muted small mt-2">
-                                <div class="d-flex justify-content-center gap-1">
+                                <div class="d-flex justify-content-center gap-1 flex-wrap">
                                     <span>{{ number_format($summary['totalCollected']) }}</span>
                                     <span>+</span>
                                     <span>{{ number_format($summary['creditSales']) }}</span>
                                     <span>+</span>
-                                    <span>{{ number_format($summary['missingMoney']) }}</span>
+                                    <span>{{ number_format($summary['totalExpenses']) }}</span>
                                     <span>=</span>
-                                    <span class="fw-semibold">{{ number_format($summary['totalSales']) }}</span>
+                                    <span class="fw-semibold">{{ number_format($summary['validationCheck']) }}</span>
+                                    <span>(sales {{ number_format($summary['totalSales']) }})</span>
                                 </div>
                             </div>
+                            @if(($managementOverhead ?? 0) > 0)
+                                <div class="text-muted small mt-2">
+                                    Management overhead (not in till): MWK {{ number_format($managementOverhead) }}
+                                </div>
+                            @endif
                             @if(!$summary['isAccurate'])
                                 <div class="text-danger small mt-2">
                                     Validation: {{ number_format($summary['validationCheck']) }}

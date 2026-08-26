@@ -175,9 +175,16 @@
                                 <td>{{ $unit->is_base_unit ? '1' : $unit->conversion_factor . ' ' . ($warehouseStock->units->firstWhere('is_base_unit', true)?->unit_name ?? 'units') }}</td>
                                 <td>MWK {{ number_format($unit->purchase_price, 0) }}</td>
                                 @foreach($bars as $bar)
-                                    @php $barPrice = $unit->barPrices->firstWhere('bar_id', $bar->id); @endphp
+                                    @php
+                                        $barPrice = $unit->barPrices->firstWhere('bar_id', $bar->id);
+                                        $showDash = $unit->is_base_unit
+                                            && ($unit->unit_name === 'Shot')
+                                            && ($bar->name === \App\Models\Bar::LIQUOR_SHOP || ! $bar->allowsWarehouseTransferUnit('Shot'));
+                                    @endphp
                                     <td>
-                                        @if($barPrice)
+                                        @if($showDash)
+                                            <span class="text-muted">—</span>
+                                        @elseif($barPrice && (float) $barPrice->selling_price > 0)
                                             <span class="fw-semibold text-primary">MWK {{ number_format($barPrice->selling_price, 0) }}</span>
                                         @else
                                             <span class="text-muted">—</span>
@@ -191,7 +198,7 @@
                     </tbody>
                 </table>
             </div>
-            <p class="small text-muted mb-0 mt-2">Additional unit prices flow to seller stock entry when items are transferred.</p>
+            <p class="small text-muted mb-0 mt-2">Additional unit prices flow to seller sales records when items are transferred.</p>
         </div>
 
         <!-- SECTION C: Cost Summary -->
@@ -235,15 +242,26 @@
                     </thead>
                     <tbody>
                         @foreach($bars as $bar)
+                            @php
+                                $branchPrice = $warehouseStock->getSellingPriceForBranch($bar->id);
+                                $branchCost = $warehouseStock->getUnitCost();
+                                if ($baseUnit = $warehouseStock->units->firstWhere('is_base_unit', true)) {
+                                    if ($baseUnit->unit_name === 'Shot' && ($bar->name === \App\Models\Bar::LIQUOR_SHOP || ! $bar->allowsWarehouseTransferUnit('Shot'))) {
+                                        $bottleUnit = $warehouseStock->getBottleSellingUnit();
+                                        $branchCost = $bottleUnit ? (float) $bottleUnit->purchase_price : $branchCost;
+                                    }
+                                }
+                                $branchProfit = $branchPrice !== null ? $branchPrice - $branchCost : null;
+                            @endphp
                             <tr>
                                 <td>{{ $bar->name }}</td>
-                                <td>MWK {{ number_format($warehouseStock->getStockValueForBranch($bar->id) / max(1, $warehouseStock->quantity), 2) }}</td>
-                                <td class="{{ $warehouseStock->getPotentialProfitForBar($bar->id) / max(1, $warehouseStock->quantity) >= 0 ? 'text-success' : 'text-danger' }}">
-                                    MWK {{ number_format($warehouseStock->getPotentialProfitForBar($bar->id) / max(1, $warehouseStock->quantity), 2) }}
+                                <td>{{ $branchPrice !== null ? 'MWK ' . number_format($branchPrice, 2) : '—' }}</td>
+                                <td class="{{ $branchProfit !== null ? ($branchProfit >= 0 ? 'text-success' : 'text-danger') : 'text-muted' }}">
+                                    {{ $branchProfit !== null ? 'MWK ' . number_format($branchProfit, 2) : '—' }}
                                 </td>
-                                <td>MWK {{ number_format($warehouseStock->getStockValueForBranch($bar->id), 2) }}</td>
-                                <td class="{{ $warehouseStock->getPotentialProfitForBar($bar->id) >= 0 ? 'text-success' : 'text-danger' }}">
-                                    MWK {{ number_format($warehouseStock->getPotentialProfitForBar($bar->id), 2) }}
+                                <td>{{ $branchPrice !== null ? 'MWK ' . number_format($warehouseStock->quantity * $branchPrice, 2) : '—' }}</td>
+                                <td class="{{ $branchProfit !== null && $warehouseStock->quantity > 0 ? ($branchProfit * $warehouseStock->quantity >= 0 ? 'text-success' : 'text-danger') : 'text-muted' }}">
+                                    {{ $branchProfit !== null && $warehouseStock->quantity > 0 ? 'MWK ' . number_format($branchProfit * $warehouseStock->quantity, 2) : '—' }}
                                 </td>
                             </tr>
                         @endforeach
@@ -264,6 +282,7 @@
                             <th>Date</th>
                             <th>Action</th>
                             <th>Quantity</th>
+                            <th>Destination Bar</th>
                             <th>Unit Cost</th>
                             <th>Total Cost</th>
                             <th>Supplier</th>
@@ -282,6 +301,15 @@
                                 <td class="{{ $transaction->isAddition() ? 'transaction-addition' : 'transaction-deduction' }}">
                                     {{ $transaction->isAddition() ? '+' : '' }}{{ $transaction->quantity }}
                                 </td>
+                                <td>
+                                    @if($transaction->destinationBar)
+                                        <span class="badge bg-primary">{{ $transaction->destinationBar->name }}</span>
+                                    @elseif($transaction->transaction_type === 'transfer' && $transaction->notes)
+                                        <span class="text-muted small">{{ $transaction->notes }}</span>
+                                    @else
+                                        <span class="text-muted">—</span>
+                                    @endif
+                                </td>
                                 <td>{{ $transaction->unit_cost ? 'MWK ' . number_format($transaction->unit_cost, 2) : 'N/A' }}</td>
                                 <td>{{ $transaction->total_cost ? 'MWK ' . number_format($transaction->total_cost, 2) : 'N/A' }}</td>
                                 <td>{{ $transaction->supplier ?? 'N/A' }}</td>
@@ -289,7 +317,7 @@
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="7" class="text-center py-4">
+                                <td colspan="8" class="text-center py-4">
                                     <p class="text-muted mb-0">No transaction history found.</p>
                                 </td>
                             </tr>
@@ -305,33 +333,48 @@
                 <i class="bi bi-graph-up me-2"></i>Audit Summary
             </div>
             <div class="row">
-                <div class="col-md-3 mb-3">
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Lifetime Quantity Purchased</div>
+                    <div class="info-value">{{ number_format($warehouseStock->lifetime_quantity_purchased) }}</div>
+                    <div class="small text-muted">From purchase &amp; restock ledger entries only</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Lifetime Quantity Issued</div>
+                    <div class="info-value">{{ number_format($warehouseStock->lifetime_quantity_sold) }}</div>
+                    <div class="small text-muted">Transfers to bars and warehouse sales</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Current Stock On Hand</div>
+                    <div class="info-value">{{ number_format($warehouseStock->quantity) }}</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Realized Profit</div>
+                    <div class="info-value {{ $warehouseStock->getRealizedProfit() >= 0 ? 'text-success' : 'text-danger' }}">
+                        MWK {{ number_format($warehouseStock->getRealizedProfit(), 2) }}
+                    </div>
+                    <div class="small text-muted">Sales revenue minus cost of goods sold</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Unrealized Profit</div>
+                    <div class="info-value {{ $warehouseStock->getUnrealizedProfit() >= 0 ? 'text-success' : 'text-danger' }}">
+                        MWK {{ number_format($warehouseStock->getUnrealizedProfit(), 2) }}
+                    </div>
+                    <div class="small text-muted">Current stock value minus current cost value</div>
+                </div>
+                <div class="col-md-4 mb-3">
+                    <div class="info-label">Net Inventory Position</div>
+                    <div class="info-value {{ $warehouseStock->getNetInventoryPosition() >= 0 ? 'text-success' : 'text-danger' }}">
+                        MWK {{ number_format($warehouseStock->getNetInventoryPosition(), 2) }}
+                    </div>
+                    <div class="small text-muted">Realized + unrealized profit</div>
+                </div>
+                <div class="col-md-4 mb-3">
                     <div class="info-label">Current Stock Value</div>
                     <div class="info-value text-primary">MWK {{ number_format($warehouseStock->quantity * $warehouseStock->selling_price, 2) }}</div>
                 </div>
-                <div class="col-md-3 mb-3">
+                <div class="col-md-4 mb-3">
                     <div class="info-label">Current Cost Value</div>
-                    <div class="info-value">MWK {{ number_format($warehouseStock->quantity * ($warehouseStock->average_unit_cost > 0 ? $warehouseStock->average_unit_cost : $warehouseStock->purchase_price), 2) }}</div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="info-label">Potential Profit</div>
-                    <div class="info-value {{ $warehouseStock->profit_percentage >= 0 ? 'text-success' : 'text-danger' }}">
-                        MWK {{ number_format($warehouseStock->quantity * ($warehouseStock->selling_price - ($warehouseStock->average_unit_cost > 0 ? $warehouseStock->average_unit_cost : $warehouseStock->purchase_price)), 2) }}
-                    </div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="info-label">Lifetime Quantity Purchased</div>
-                    <div class="info-value">{{ $warehouseStock->lifetime_quantity_purchased }}</div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="info-label">Lifetime Quantity Sold</div>
-                    <div class="info-value">{{ $warehouseStock->lifetime_quantity_sold }}</div>
-                </div>
-                <div class="col-md-3 mb-3">
-                    <div class="info-label">Lifetime Profit Estimate</div>
-                    <div class="info-value {{ $warehouseStock->lifetime_profit_estimate >= 0 ? 'text-success' : 'text-danger' }}">
-                        MWK {{ number_format($warehouseStock->lifetime_profit_estimate, 2) }}
-                    </div>
+                    <div class="info-value">MWK {{ number_format($warehouseStock->quantity * $warehouseStock->getUnitCost(), 2) }}</div>
                 </div>
             </div>
         </div>

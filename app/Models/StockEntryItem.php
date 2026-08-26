@@ -20,7 +20,7 @@ class StockEntryItem extends Model
 
     public function stockEntry()
     {
-        return $this->belongsTo(DailyStockEntry::class);
+        return $this->belongsTo(Sale::class);
     }
 
     public function item()
@@ -56,17 +56,17 @@ class StockEntryItem extends Model
 
     protected function autoCalculateClosingStock()
     {
-        // Auto-calculate closing stock based on sales
-        // If no sales data exists yet, maintain opening stock
+        $opening = (float) ($this->attributes['opening_stock'] ?? 0);
+        $ordered = (float) ($this->attributes['ordered_stock'] ?? 0);
+        $total = $opening + $ordered;
+        $sold = (float) ($this->attributes['sold_quantity'] ?? 0);
+
         if (!isset($this->attributes['sold_quantity']) || $this->attributes['sold_quantity'] === null) {
-            // No sales recorded yet - maintain opening stock
-            $this->attributes['closing_stock'] = $this->opening_stock;
             $this->attributes['sold_quantity'] = 0;
-        } else {
-            // Calculate closing stock based on sold quantity
-            $this->attributes['closing_stock'] = $this->total_stock - $this->attributes['sold_quantity'];
+            $sold = 0;
         }
-        
+
+        $this->attributes['closing_stock'] = max(0, $total - $sold);
         $this->calculateSalesAmount();
     }
 
@@ -147,3 +147,4 @@ class StockEntryItem extends Model
         return implode(' + ', $parts);
     }
 }
+

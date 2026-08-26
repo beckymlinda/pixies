@@ -4,7 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class DailyStockEntry extends Model
+class Sale extends Model
 {
     protected $fillable = [
         'bar_id', 
@@ -109,10 +109,11 @@ class DailyStockEntry extends Model
     public function getStatusIcon()
     {
         return match($this->status) {
-            'verified' => '✅',
-            'pending' => '⏳',
-            'flagged' => '🚩',
-            default => '❓'
+            'verified' => 'âœ…',
+            'pending' => 'â³',
+            'flagged' => 'ðŸš©',
+            default => 'â“'
         };
     }
 }
+

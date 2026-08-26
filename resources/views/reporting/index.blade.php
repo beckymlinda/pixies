@@ -104,9 +104,9 @@
                             <button class="btn btn-sm btn-outline-secondary">
                                 <i class="bi bi-filter me-1"></i> Filter
                             </button>
-                            <button class="btn btn-sm btn-outline-primary">
-                                <i class="bi bi-download me-1"></i> Export
-                            </button>
+                            <a href="{{ route('reporting.export') }}" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-download me-1"></i> Export CSV
+                            </a>
                         </div>
                     </div>
                 </div>
@@ -197,7 +197,7 @@
                                                        title="View Report">
                                                         <i class="bi bi-eye"></i>
                                                     </a>
-                                                    @if((auth()->user()->isSeller() && $report->user_id === auth()->id() && $report->date->format('Y-m-d') === now()->format('Y-m-d')) || auth()->user()->isManager() || auth()->user()->isDirector())
+                                                    @if($report->isEditableBy(auth()->user()))
                                                         <a href="{{ route('reporting.edit', $report) }}" 
                                                            class="btn btn-sm btn-outline-secondary btn-icon"
                                                            title="Edit Report">

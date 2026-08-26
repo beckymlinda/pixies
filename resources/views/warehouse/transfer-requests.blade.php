@@ -145,12 +145,14 @@
                                             @foreach($request->items as $index => $item)
                                                 @php
                                                     $warehouseStock = $item->warehouseStock;
+                                                    $bar = $request->bar;
+                                                    $availability = $warehouseStock ? $warehouseStock->getRequestAvailabilityForBar($bar) : ['available_quantity' => 0, 'available_quantity_base' => 0, 'stock_unit' => 'units', 'is_out_of_stock' => true];
                                                     $requestedBaseUnits = $item->quantity_requested * ($item->conversion_factor ?: 1);
-                                                    $availableQty = $warehouseStock?->quantity ?? 0;
-                                                    $isOutOfStock = $availableQty < $requestedBaseUnits;
+                                                    $availableBase = $availability['available_quantity_base'];
+                                                    $isOutOfStock = $availability['is_out_of_stock'] || $availableBase < $requestedBaseUnits;
                                                     $maxApprove = $item->conversion_factor > 0
-                                                        ? floor($availableQty / $item->conversion_factor)
-                                                        : $availableQty;
+                                                        ? (int) floor($availableBase / $item->conversion_factor)
+                                                        : (int) $availableBase;
                                                 @endphp
                                                 <tr class="{{ $isOutOfStock ? 'table-danger' : '' }}">
                                                     <input type="hidden" name="items[{{ $index }}][id]" value="{{ $item->id }}">
@@ -163,10 +165,15 @@
                                                         <div class="text-muted small" style="font-size: 0.75rem;">({{ $requestedBaseUnits }} base units)</div>
                                                     </td>
                                                     <td data-label="Warehouse Available">
-                                                        <span class="fw-bold {{ $availableQty <= 0 ? 'text-danger' : 'text-success' }}">
-                                                            {{ $availableQty }} base units
-                                                        </span>
-                                                        <div class="text-muted small" style="font-size: 0.75rem;">(approx. {{ $maxApprove }} {{ $item->unit_name ?? 'units' }})</div>
+                                                        @if($availability['is_out_of_stock'])
+                                                            <span class="fw-bold text-danger">Out of stock</span>
+                                                            <div class="text-muted small" style="font-size: 0.75rem;">(0 {{ $availability['stock_unit'] }})</div>
+                                                        @else
+                                                            <span class="fw-bold text-success">
+                                                                {{ number_format($availability['available_quantity']) }} {{ $availability['stock_unit'] }}
+                                                            </span>
+                                                            <div class="text-muted small" style="font-size: 0.75rem;">({{ number_format($availableBase) }} base units)</div>
+                                                        @endif
                                                     </td>
                                                     <td data-label="Approve Qty">
                                                         <input type="number" 
@@ -188,17 +195,22 @@
                                     <textarea class="form-control" name="notes" rows="2" placeholder="Write any notes about approval or rejection reason..."></textarea>
                                 </div>
 
-                                <div class="mt-4 d-flex justify-content-end gap-2 action-buttons">
-                                    <!-- Reject Button triggers rejection modal or submits directly -->
+                                <div class="mt-4 d-flex justify-content-end gap-2 action-buttons flex-wrap">
                                     <button type="button" 
                                             class="btn btn-outline-danger px-4 rounded-pill" 
                                             onclick="rejectRequest({{ $request->id }})">
-                                        <i class="bi bi-x-circle me-1"></i>Reject Entire Request
+                                        <i class="bi bi-x-circle me-1"></i>Reject
                                     </button>
                                     <button type="submit" class="btn btn-success px-4 rounded-pill">
                                         <i class="bi bi-check-circle me-1"></i>Process Approval
                                     </button>
                                 </div>
+                            </form>
+                            <form action="{{ route('warehouse.transfer-requests.quick-approve', $request) }}" method="POST" class="mt-2 text-end" onsubmit="return confirm('Approve all requested quantities?');">
+                                @csrf
+                                <button type="submit" class="btn btn-outline-primary btn-sm rounded-pill px-3">
+                                    <i class="bi bi-lightning me-1"></i>Approve All Requested Quantities
+                                </button>
                             </form>
 
                             <!-- Hidden Rejection Form -->
@@ -256,6 +268,14 @@
                                         <strong>Notes:</strong> {{ $history->notes }}
                                     </div>
                                 @endif
+                                @if($history->isApproved())
+                                    <form action="{{ route('warehouse.transfer-requests.revert', $history) }}" method="POST" class="mt-2" onsubmit="return confirm('Revert this transfer? Stock will return to warehouse and be removed from the bar.');">
+                                        @csrf
+                                        <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill w-100">
+                                            <i class="bi bi-arrow-counterclockwise me-1"></i>Disapprove / Revert
+                                        </button>
+                                    </form>
+                                @endif
                             </div>
                         @empty
                             <div class="p-4 text-center text-muted small">
@@ -266,6 +286,70 @@
                 </div>
             </div>
         </div>
+
+        {{-- Full request index --}}
+        @if(isset($allRequests) && $allRequests->count())
+        <div class="row mt-4">
+            <div class="col-12">
+                <h4 class="fw-bold mb-3 text-dark">All Transfer Requests</h4>
+                <div class="card request-card border-0">
+                    <div class="table-responsive">
+                        <table class="table item-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Bar</th>
+                                    <th>Items Requested</th>
+                                    <th>Status</th>
+                                    <th>Requested</th>
+                                    <th>Processed</th>
+                                    <th class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach($allRequests as $req)
+                                    <tr>
+                                        <td><span class="badge bg-primary">{{ $req->resolveBarName() }}</span></td>
+                                        <td class="small">
+                                            @foreach($req->items as $line)
+                                                <div>{{ $line->display_name }} — {{ $line->quantity_requested }} {{ $line->unit_name ?? 'units' }}
+                                                    @if($req->isApproved() || $req->isRejected())
+                                                        <span class="text-muted">(approved: {{ $line->quantity_approved }})</span>
+                                                    @endif
+                                                </div>
+                                            @endforeach
+                                        </td>
+                                        <td>
+                                            <span class="badge {{ $req->isApproved() ? 'bg-success' : ($req->isRejected() ? 'bg-danger' : 'bg-warning text-dark') }}">
+                                                {{ ucfirst(str_replace('_', ' ', $req->status)) }}
+                                            </span>
+                                        </td>
+                                        <td class="small text-muted">{{ $req->requested_at?->format('M d, Y h:i A') }}</td>
+                                        <td class="small text-muted">{{ $req->approved_at?->format('M d, Y h:i A') ?? '—' }}</td>
+                                        <td class="text-end">
+                                            @if($req->isPending())
+                                                <a href="#approveForm-{{ $req->id }}" class="btn btn-sm btn-success rounded-pill me-1">Review</a>
+                                                <form action="{{ route('warehouse.transfer-requests.quick-approve', $req) }}" method="POST" class="d-inline" onsubmit="return confirm('Approve all requested quantities?');">
+                                                    @csrf
+                                                    <button type="submit" class="btn btn-sm btn-outline-success rounded-pill">Approve</button>
+                                                </form>
+                                            @elseif($req->isApproved())
+                                                <form action="{{ route('warehouse.transfer-requests.revert', $req) }}" method="POST" class="d-inline" onsubmit="return confirm('Disapprove and revert? Stock returns to warehouse and is deducted from bar.');">
+                                                    @csrf
+                                                    <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">Disapprove</button>
+                                                </form>
+                                            @else
+                                                <span class="text-muted small">—</span>
+                                            @endif
+                                        </td>
+                                    </tr>
+                                @endforeach
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+        @endif
     </div>
 </div>
 

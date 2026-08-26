@@ -7,6 +7,11 @@ use App\Models\OrderRequest;
 use App\Models\OrderRequestItem;
 use App\Models\Item;
 use App\Models\Bar;
+use App\Models\Sale;
+use App\Models\StockEntryItem;
+use App\Models\ActivityLog;
+use App\Models\BarItemPrice;
+use App\Services\InventoryService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
@@ -140,7 +145,7 @@ class OrderRequestController extends Controller
     }
 
     /**
-     * Director: Detailed view of a single request — always editable for toggling.
+     * Director: Detailed view of a single request â€” always editable for toggling.
      */
     public function directorShow(OrderRequest $orderRequest)
     {
@@ -181,7 +186,7 @@ class OrderRequestController extends Controller
         DB::beginTransaction();
         try {
 
-            // ── REOPEN: reset to pending ──
+            // â”€â”€ REOPEN: reset to pending â”€â”€
             if ($request->action === 'reopen') {
                 // Reset all approved quantities to 0
                 $orderRequest->items()->update(['approved_quantity' => 0]);
@@ -200,7 +205,7 @@ class OrderRequestController extends Controller
                     ->with('success', 'Request has been reopened and reset to Pending.');
             }
 
-            // ── DENY: deny request ──
+            // â”€â”€ DENY: deny request â”€â”€
             if ($request->action === 'deny') {
                 // Reset approved quantities
                 $orderRequest->items()->update(['approved_quantity' => 0]);
@@ -211,12 +216,21 @@ class OrderRequestController extends Controller
                     'seller_notified' => false,
                 ]);
 
+                ActivityLog::log([
+                    'action' => 'stock_request_denied',
+                    'description' => "Director denied stock request #{$orderRequest->id} for {$orderRequest->bar->name}.",
+                    'subject_type' => OrderRequest::class,
+                    'subject_id' => $orderRequest->id,
+                    'old_values' => ['status' => $orderRequest->getOriginal('status')],
+                    'new_values' => ['status' => 'denied'],
+                ]);
+
                 DB::commit();
                 return redirect()->route('director.orders.index')
                     ->with('success', 'Stock request denied.');
             }
 
-            // ── APPROVE (or re-approve) ──
+            // â”€â”€ APPROVE (or re-approve) â”€â”€
             $isPartial = false;
             $allZero = true;
 
@@ -226,10 +240,12 @@ class OrderRequestController extends Controller
 
                 $approvedQty = (int)$itemData['approved_quantity'];
                 $item = Item::findOrFail($itemId);
+                $inventoryService = new InventoryService();
+                $approvedBase = $inventoryService->convertSellerOrderQuantityToBaseUnits($item->id, $approvedQty);
 
                 // If approved quantity exceeds unified stock, automatically increase it
-                if ($approvedQty > $item->director_stock) {
-                    $item->update(['director_stock' => $approvedQty]);
+                if ($approvedBase > $item->director_stock) {
+                    $item->update(['director_stock' => $approvedBase]);
                 }
 
                 if ($approvedQty < $reqItem->requested_quantity) {
@@ -241,7 +257,27 @@ class OrderRequestController extends Controller
                 }
 
                 // Save new approved quantity
+                $previousApprovedQty = (int) $reqItem->approved_quantity;
                 $reqItem->update(['approved_quantity' => $approvedQty]);
+
+                if ($approvedQty !== $previousApprovedQty) {
+                    ActivityLog::log([
+                        'action' => 'stock_request_item_approval_changed',
+                        'description' => "Director updated approved quantity for {$item->name} at {$orderRequest->bar->name}: {$previousApprovedQty} -> {$approvedQty} units.",
+                        'subject_type' => OrderRequestItem::class,
+                        'subject_id' => $reqItem->id,
+                        'old_values' => [
+                            'item_id' => $item->id,
+                            'item_name' => $item->name,
+                            'approved_quantity' => $previousApprovedQty,
+                        ],
+                        'new_values' => [
+                            'item_id' => $item->id,
+                            'item_name' => $item->name,
+                            'approved_quantity' => $approvedQty,
+                        ],
+                    ]);
+                }
             }
 
             // Determine resulting status
@@ -253,18 +289,30 @@ class OrderRequestController extends Controller
                 $status = 'approved';
             }
 
+            $previousStatus = $orderRequest->status;
             $orderRequest->update([
                 'status' => $status,
                 'notes' => $request->notes,
                 'seller_notified' => false,
             ]);
 
+            ActivityLog::log([
+                'action' => $status === 'approved' ? 'stock_request_approved' : 'stock_request_partially_approved',
+                'description' => "Director {$status} stock request #{$orderRequest->id} for {$orderRequest->bar->name}.",
+                'subject_type' => OrderRequest::class,
+                'subject_id' => $orderRequest->id,
+                'old_values' => ['status' => $previousStatus],
+                'new_values' => ['status' => $status],
+            ]);
+
+            $this->syncApprovedStockToDailyEntry($orderRequest);
+
             DB::commit();
 
             $label = match($status) {
-                'approved' => '✅ Approved',
-                'partially_approved' => 'ℹ️ Partially Approved',
-                'denied' => '❌ Denied (all quantities were 0)',
+                'approved' => 'âœ… Approved',
+                'partially_approved' => 'â„¹ï¸ Partially Approved',
+                'denied' => 'âŒ Denied (all quantities were 0)',
                 default => $status,
             };
 
@@ -284,4 +332,88 @@ class OrderRequestController extends Controller
     {
         return;
     }
+
+    /**
+     * Reflect director-approved quantities on today's seller stock entry.
+     */
+    private function syncApprovedStockToDailyEntry(OrderRequest $orderRequest): void
+    {
+        if (!in_array($orderRequest->status, ['approved', 'partially_approved'], true)) {
+            return;
+        }
+
+        $orderRequest->loadMissing('items.item');
+        $entryDate = $orderRequest->date->format('Y-m-d');
+
+        $todayEntry = Sale::firstOrCreate([
+            'bar_id' => $orderRequest->bar_id,
+            'date' => $entryDate,
+        ], [
+            'user_id' => $orderRequest->user_id,
+        ]);
+
+        $inventoryService = new InventoryService();
+
+        foreach ($orderRequest->items as $reqItem) {
+            $approved = (int) $reqItem->approved_quantity;
+            if ($approved <= 0) {
+                continue;
+            }
+
+            $item = $reqItem->item;
+            if (!$item) {
+                continue;
+            }
+
+            $approvedBase = $inventoryService->convertSellerOrderQuantityToBaseUnits($item->id, $approved);
+
+            $barPrice = BarItemPrice::where('bar_id', $orderRequest->bar_id)
+                ->where('item_id', $item->id)
+                ->first()?->price ?? $item->price;
+
+            $stockEntryItem = $todayEntry->stockEntryItems()
+                ->where('item_id', $item->id)
+                ->first();
+
+            if ($stockEntryItem) {
+                $stockEntryItem->ordered_stock = (float) $approvedBase;
+                $stockEntryItem->total_stock = (float) $stockEntryItem->opening_stock + $stockEntryItem->ordered_stock;
+                $stockEntryItem->closing_stock = max(0, $stockEntryItem->total_stock - (float) $stockEntryItem->sold_quantity);
+                $stockEntryItem->save();
+                continue;
+            }
+
+            $yesterday = $orderRequest->date->copy()->subDay()->format('Y-m-d');
+            $yesterdayClosing = (float) (Sale::where('bar_id', $orderRequest->bar_id)
+                ->where('date', $yesterday)
+                ->first()
+                ?->stockEntryItems()
+                ->where('item_id', $item->id)
+                ->value('closing_stock') ?? 0);
+
+            if ($yesterdayClosing <= 0) {
+                $openingStock = $approvedBase;
+                $orderedStock = 0;
+            } else {
+                $openingStock = $yesterdayClosing;
+                $orderedStock = $approvedBase;
+            }
+
+            $totalStock = $openingStock + $orderedStock;
+
+            StockEntryItem::create([
+                'stock_entry_id' => $todayEntry->id,
+                'item_id' => $item->id,
+                'opening_stock' => $openingStock,
+                'ordered_stock' => $orderedStock,
+                'total_stock' => $totalStock,
+                'closing_stock' => $totalStock,
+                'sold_quantity' => 0,
+                'sales_amount' => 0,
+                'price' => $barPrice,
+                'purchase_price' => $item->average_unit_cost ?? 0,
+            ]);
+        }
+    }
 }
+

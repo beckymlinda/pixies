@@ -118,15 +118,9 @@
                     </div>
                     <h3 class="h5 fw-bold mb-2">Sell</h3>
                     <p class="text-muted small mb-4">Record opening stock, sales, and closing stock for today.</p>
-                    @if($todayEntry ?? null)
-                        <a href="{{ route('stock-entries.edit', $todayEntry) }}" class="btn btn-primary w-100 rounded-pill py-2">
-                            <i class="bi bi-play-fill me-2"></i>Continue Selling
-                        </a>
-                    @else
-                        <a href="{{ route('stock-entries.create') }}" class="btn btn-primary w-100 rounded-pill py-2">
-                            <i class="bi bi-plus-lg me-2"></i>Start Selling
-                        </a>
-                    @endif
+                    <a href="{{ route('stock-entries.sell') }}" class="btn btn-primary w-100 rounded-pill py-2">
+                        <i class="bi bi-cart-check me-2"></i>Sell
+                    </a>
                 </div>
             </div>
         </div>
@@ -137,10 +131,10 @@
                     <div class="icon-box bg-slate-100 text-slate-800">
                         <i class="bi bi-clipboard-check"></i>
                     </div>
-                    <h3 class="h5 fw-bold mb-2">Shift Report</h3>
+                    <h3 class="h5 fw-bold mb-2">Balance</h3>
                     <p class="text-muted small mb-2">Record payments, expenditure, and close your shift.</p>
                     <a href="{{ route('reporting.index') }}" class="btn btn-outline-secondary w-100 rounded-pill py-2">
-                        Open Shift Report
+                        Open Balance
                     </a>
                 </div>
             </div>
@@ -242,7 +236,7 @@
                                     <tr>
                                         <td colspan="4" class="text-center py-5">
                                             <div class="opacity-25 display-4 mb-3">📝</div>
-                                            <p class="text-muted">No stock entries found for this location.</p>
+                                            <p class="text-muted">No sales records found for this location.</p>
                                         </td>
                                     </tr>
                                 @endforelse

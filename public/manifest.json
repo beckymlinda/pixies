@@ -7,14 +7,6 @@
     "background_color": "#ffffff",
     "theme_color": "#dc3545",
     "orientation": "portrait",
-    "icons": [
-        {
-            "src": "/icon.svg",
-            "sizes": "any",
-            "type": "image/svg+xml",
-            "purpose": "any maskable"
-        }
-    ],
     "categories": ["business", "productivity", "finance"],
     "lang": "en",
     "scope": "/",

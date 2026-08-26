@@ -14,7 +14,7 @@ class BottleCount extends Model
 
     public function stockEntry()
     {
-        return $this->belongsTo(DailyStockEntry::class, 'stock_entry_id');
+        return $this->belongsTo(Sale::class, 'stock_entry_id');
     }
 
     public function bar()
@@ -32,3 +32,4 @@ class BottleCount extends Model
         return $this->belongsTo(User::class, 'recorded_by');
     }
 }
+

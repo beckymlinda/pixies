@@ -19,7 +19,6 @@ class CustomerTab extends Model
         'amount',
         'description',
         'paid_amount',
-        'balance',
         'status',
         'created_by',
     ];

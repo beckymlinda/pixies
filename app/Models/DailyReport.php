@@ -64,6 +64,22 @@ class DailyReport extends Model
     }
 
     /**
+     * Sellers may edit their own report within 48 hours of submission.
+     */
+    public function isEditableBy(User $user): bool
+    {
+        if ($user->isManager() || $user->isDirector()) {
+            return true;
+        }
+
+        if (!$user->isSeller() || $this->user_id !== $user->id) {
+            return false;
+        }
+
+        return $this->created_at && $this->created_at->gte(now()->subHours(48));
+    }
+
+    /**
      * Get today's report for the current user
      */
     public static function getTodayReport(): ?self

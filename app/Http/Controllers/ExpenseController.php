@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\CustomerTab;
 use App\Models\Expense;
+use App\Models\Bar;
 use Illuminate\Http\Request;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\View\View;
@@ -16,7 +17,8 @@ class ExpenseController extends Controller
         $user = auth()->user();
 
         $expenseRows = Expense::query()
-            ->when($user->isSeller(), fn ($q) => $q->where('user_id', $user->id))
+            ->when($user->isSeller(), fn ($q) => $q->where('user_id', $user->id)->barOperating())
+            ->when($user->isAdmin(), fn ($q) => $q->overhead())
             ->selectRaw('date, SUM(amount) as expense_total, COUNT(*) as expense_count')
             ->whereNotNull('date')
             ->groupBy('date')
@@ -59,6 +61,7 @@ class ExpenseController extends Controller
 
         if ($user->isSeller()) {
             $expenses = Expense::where('user_id', $user->id)
+                ->barOperating()
                 ->where('date', $date)
                 ->with('user')
                 ->orderBy('created_at', 'desc')
@@ -70,8 +73,9 @@ class ExpenseController extends Controller
                 ->orderBy('created_at', 'desc')
                 ->get();
         } else {
-            $expenses = Expense::where('date', $date)
-                ->with('user')
+            $expenses = Expense::overhead()
+                ->where('date', $date)
+                ->with(['user', 'bar'])
                 ->orderBy('created_at', 'desc')
                 ->get();
 
@@ -93,7 +97,9 @@ class ExpenseController extends Controller
                 ->with('info', 'Record expenditure in your shift report.');
         }
 
-        return view('expenses.create');
+        return view('expenses.create', [
+            'bars' => auth()->user()->isAdmin() ? Bar::listed()->orderBy('name')->get() : collect(),
+        ]);
     }
 
     public function store(Request $request): RedirectResponse
@@ -102,11 +108,13 @@ class ExpenseController extends Controller
             return redirect()->route('reporting.index')
                 ->with('info', 'Record expenditure in your shift report.');
         }
+        $user = auth()->user();
         $validated = $request->validate([
             'type' => 'required|in:' . implode(',', array_keys(Expense::operationalTypes())),
             'amount' => 'required|numeric|min:0',
             'description' => 'nullable|string|max:500',
             'date' => 'required|date',
+            'bar_id' => $user->isAdmin() ? 'required|exists:bars,id' : 'nullable',
         ]);
 
         Expense::create([
@@ -114,7 +122,9 @@ class ExpenseController extends Controller
             'amount' => $validated['amount'],
             'description' => $validated['description'] ?? null,
             'date' => $validated['date'],
-            'user_id' => auth()->id(),
+            'user_id' => $user->id,
+            'bar_id' => $user->isAdmin() ? $validated['bar_id'] : null,
+            'is_overhead' => $user->isAdmin(),
         ]);
 
         return redirect()->route('expenses.index')->with('success', 'Expense recorded successfully.');
@@ -164,6 +174,9 @@ class ExpenseController extends Controller
         $user = auth()->user();
         if ($user->isSeller() && $expense->user_id !== $user->id) {
             abort(403, 'Unauthorized access to expense.');
+        }
+        if ($user->isAdmin() && !$expense->is_overhead) {
+            abort(403, 'Shift expenses are managed through daily shift reports.');
         }
     }
 }

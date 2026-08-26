@@ -101,7 +101,7 @@ class WarehouseTransferRequest extends Model
      */
     public function isApproved(): bool
     {
-        return $this->status === 'approved';
+        return in_array($this->status, ['approved', 'partially_approved'], true);
     }
 
     /**

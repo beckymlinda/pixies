@@ -46,9 +46,9 @@ class User extends Authenticatable
         return $this->belongsTo(Bar::class);
     }
 
-    public function dailyStockEntries()
+    public function sales()
     {
-        return $this->hasMany(DailyStockEntry::class);
+        return $this->hasMany(Sale::class);
     }
 
     public function debts()
@@ -97,3 +97,4 @@ class User extends Authenticatable
         ];
     }
 }
+

@@ -5,9 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\CustomerTab;
 use App\Models\Bar;
 use App\Models\User;
+use App\Support\CsvExport;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\Rule;
 use Carbon\Carbon;
 
 class CreditCustomersController extends Controller
@@ -20,16 +22,16 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        // Bypass bar check for Director
-        if (!$bar && !$user->isDirector()) {
+        // Managers and directors can access credit tabs without a personal bar assignment.
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to access credit customers.');
         }
 
         $filter = $request->get('filter', 'all');
         $search = $request->get('search', '');
 
-        // If director and no bar, get global customers, otherwise bar specific
-        if ($user->isDirector() && !$bar) {
+        // Global view across bars for managers/directors without a bar assignment.
+        if ($user->isAdmin() && !$bar) {
             $query = CustomerTab::selectRaw('
                 customer_name,
                 phone,
@@ -95,7 +97,7 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar && !$user->isDirector()) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to create credit entries.');
         }
 
@@ -110,7 +112,7 @@ class CreditCustomersController extends Controller
             ->sort()
             ->values();
 
-        $bars = $user->isDirector() ? Bar::listed()->get() : [];
+        $bars = $user->isAdmin() ? Bar::listed()->get() : [];
 
         return view('credit-customers.create', compact('existingCustomers', 'bars', 'bar'));
     }
@@ -123,7 +125,7 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar && !$user->isDirector()) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to create credit entries.');
         }
 
@@ -133,13 +135,19 @@ class CreditCustomersController extends Controller
             'date' => 'required|date|before_or_equal:today',
             'amount' => 'required|numeric|min:0',
             'description' => 'nullable|string|max:255',
-            'bar_id' => 'required_if:is_director,1|exists:bars,id',
+            'bar_id' => ['nullable', 'exists:bars,id', Rule::requiredIf($user->isAdmin() && !$bar)],
         ]);
 
         try {
             DB::beginTransaction();
 
-            $targetBarId = $user->isDirector() ? $request->bar_id : $bar->id;
+            $targetBarId = $user->isAdmin()
+                ? ($validated['bar_id'] ?? $bar?->id)
+                : $bar->id;
+
+            if (!$targetBarId) {
+                throw new \InvalidArgumentException('A target bar is required for this credit entry.');
+            }
 
             // Create new credit entry
             CustomerTab::create([
@@ -175,7 +183,7 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar && !$user->isDirector()) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to view customer details.');
         }
 
@@ -218,16 +226,16 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar && !$user->isDirector()) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to record payments.');
         }
 
         // Get customer's unpaid tabs
-        $unpaidTabs = CustomerTab::forBar($bar->id)
-            ->where('customer_name', $customerName)
-            ->unpaid()
-            ->orderBy('date', 'asc')
-            ->get();
+        $unpaidTabsQuery = CustomerTab::where('customer_name', $customerName)->unpaid();
+        if ($bar) {
+            $unpaidTabsQuery->forBar($bar->id);
+        }
+        $unpaidTabs = $unpaidTabsQuery->orderBy('date', 'asc')->get();
 
         if ($unpaidTabs->isEmpty()) {
             return redirect()
@@ -252,7 +260,7 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar && !$user->isDirector()) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to record payments.');
         }
 
@@ -266,11 +274,11 @@ class CreditCustomersController extends Controller
             DB::beginTransaction();
 
             // Get customer's unpaid tabs
-            $unpaidTabs = CustomerTab::forBar($bar->id)
-                ->where('customer_name', $customerName)
-                ->unpaid()
-                ->orderBy('date', 'asc')
-                ->get();
+            $unpaidTabsQuery = CustomerTab::where('customer_name', $customerName)->unpaid();
+            if ($bar) {
+                $unpaidTabsQuery->forBar($bar->id);
+            }
+            $unpaidTabs = $unpaidTabsQuery->orderBy('date', 'asc')->get();
 
             if ($unpaidTabs->isEmpty()) {
                 throw new \Exception('No outstanding balance found for this customer.');
@@ -297,9 +305,12 @@ class CreditCustomersController extends Controller
 
             // Automate Integration with Daily Report
             $today = now()->format('Y-m-d');
-            $dailyReport = \App\Models\DailyReport::where('bar_id', $targetBarId)
-                ->where('date', $today)
-                ->first();
+            $paymentBarId = $bar?->id ?? $unpaidTabs->first()?->bar_id;
+            $dailyReport = $paymentBarId
+                ? \App\Models\DailyReport::where('bar_id', $paymentBarId)
+                    ->where('date', $today)
+                    ->first()
+                : null;
 
             if ($dailyReport) {
                 // Add a payment record to today's report
@@ -426,58 +437,76 @@ class CreditCustomersController extends Controller
         $user = Auth::user();
         $bar = $user->bar;
 
-        if (!$bar) {
+        if (!$bar && !$user->isAdmin()) {
             abort(403, 'You must be assigned to a bar to export data.');
         }
 
         $filter = $request->get('filter', 'all');
-        $month = $request->get('month', now()->format('Y-m'));
+        $search = $request->get('search', '');
+        $exportBarId = $bar?->id ?? $request->get('bar_id');
 
-        $query = CustomerTab::forBar($bar->id);
-
-        // Apply date filter
-        if ($filter === 'month') {
-            $query->whereRaw('DATE_FORMAT(date, "%Y-%m") = ?', [$month]);
+        if ($user->isAdmin() && !$exportBarId) {
+            $customers = CustomerTab::selectRaw('
+                customer_name,
+                phone,
+                bar_id,
+                SUM(amount) as total_amount,
+                SUM(paid_amount) as total_paid,
+                SUM(balance) as total_balance,
+                MAX(date) as last_activity,
+                GROUP_CONCAT(DISTINCT status) as statuses
+            ')
+                ->with('bar')
+                ->groupBy('customer_name', 'phone', 'bar_id')
+                ->orderBy('total_balance', 'desc')
+                ->get()
+                ->map(function ($customer) {
+                    $customer->status = $customer->total_balance <= 0 ? 'paid' :
+                        ($customer->total_paid > 0 ? 'partial' : 'open');
+                    return $customer;
+                });
+        } else {
+            if (!$exportBarId) {
+                abort(422, 'Select a bar to export credit customer data.');
+            }
+            $customers = CustomerTab::getCustomersWithBalances((int) $exportBarId);
         }
 
-        $customers = CustomerTab::getCustomersWithBalances($bar->id)
-            ->filter(function ($customer) use ($filter, $month) {
-                if ($filter === 'month') {
-                    // Check if customer has entries in the specified month
-                    return CustomerTab::forBar($bar->id)
-                        ->where('customer_name', $customer->customer_name)
-                        ->whereRaw('DATE_FORMAT(date, "%Y-%m") = ?', [$month])
-                        ->exists();
-                }
-                return true;
+        if ($search) {
+            $customers = $customers->filter(function ($customer) use ($search) {
+                return stripos($customer->customer_name, $search) !== false
+                    || stripos($customer->phone ?? '', $search) !== false;
             });
+        }
 
-        $csvData = [];
-        $csvData[] = ['Customer Name', 'Phone', 'Total Amount', 'Total Paid', 'Balance', 'Status', 'Last Activity'];
+        if ($filter !== 'all') {
+            $customers = $customers->filter(fn ($customer) => $customer->status === $filter);
+        }
 
-        foreach ($customers as $customer) {
-            $csvData[] = [
-                $customer->customer_name,
-                $customer->phone,
+        $includeBar = $user->isAdmin() && !$exportBarId;
+        $rows = [];
+        $headers = ['Customer Name', 'Phone'];
+        if ($includeBar) {
+            $headers[] = 'Bar';
+        }
+        $rows[] = array_merge($headers, ['Total Credit', 'Total Paid', 'Balance', 'Status', 'Last Activity']);
+
+        foreach ($customers->values() as $customer) {
+            $row = [$customer->customer_name, $customer->phone ?? ''];
+            if ($includeBar) {
+                $row[] = $customer->bar->name ?? '';
+            }
+            $rows[] = array_merge($row, [
                 $customer->total_amount,
                 $customer->total_paid,
                 $customer->total_balance,
                 $customer->status,
                 $customer->last_activity,
-            ];
+            ]);
         }
 
-        $filename = 'credit_customers_' . $month . '.csv';
-        
-        return response()->streamDownload(function () use ($csvData) {
-            $file = fopen('php://output', 'w');
-            foreach ($csvData as $row) {
-                fputcsv($file, $row);
-            }
-            fclose($file);
-        }, $filename, [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
-        ]);
+        $filename = 'credit_customers_' . now()->format('Y-m-d') . '.csv';
+
+        return CsvExport::download($rows, $filename);
     }
 }

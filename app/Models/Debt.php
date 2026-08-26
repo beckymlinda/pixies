@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Models;
 
@@ -10,7 +10,7 @@ class Debt extends Model
 
     public function stockEntry()
     {
-        return $this->belongsTo(DailyStockEntry::class);
+        return $this->belongsTo(Sale::class);
     }
 
     public function item()
@@ -23,3 +23,4 @@ class Debt extends Model
         return $this->belongsTo(User::class, 'seller_id');
     }
 }
+

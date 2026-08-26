@@ -163,9 +163,26 @@ class WarehouseStock extends Model
             return null;
         }
 
+        $bar = Bar::find($barId);
         $baseUnit = $this->relationLoaded('units')
             ? $this->units->firstWhere('is_base_unit', true)
             : $this->units()->where('is_base_unit', true)->first();
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot' && $bar) {
+            $useBottlePrice = $bar->name === Bar::LIQUOR_SHOP || ! $bar->allowsWarehouseTransferUnit('Shot');
+            if ($useBottlePrice) {
+                $bottleUnit = $this->getBottleSellingUnit();
+                if ($bottleUnit) {
+                    $bottlePrice = $bottleUnit->relationLoaded('barPrices')
+                        ? $bottleUnit->barPrices->firstWhere('bar_id', $barId)
+                        : $bottleUnit->barPrices()->where('bar_id', $barId)->first();
+
+                    if ($bottlePrice && (float) $bottlePrice->selling_price > 0) {
+                        return (float) $bottlePrice->selling_price;
+                    }
+                }
+            }
+        }
 
         if (! $baseUnit) {
             return (float) $this->selling_price;
@@ -175,9 +192,27 @@ class WarehouseStock extends Model
             ? $baseUnit->barPrices->firstWhere('bar_id', $barId)
             : $baseUnit->barPrices()->where('bar_id', $barId)->first();
 
-        return $barPrice
+        return $barPrice && (float) $barPrice->selling_price > 0
             ? (float) $barPrice->selling_price
-            : (float) $this->selling_price;
+            : ((float) $this->selling_price > 0 ? (float) $this->selling_price : null);
+    }
+
+    /**
+     * Bottle selling unit for shot-based warehouse items.
+     */
+    public function getBottleSellingUnit(): ?\App\Models\WarehouseUnit
+    {
+        $units = $this->relationLoaded('units')
+            ? $this->units
+            : $this->units()->get();
+
+        $bottleUnit = $units->first(fn ($unit) => $unit->unit_name === 'Bottle' && ! $unit->is_base_unit);
+
+        if (! $bottleUnit && $this->purchase_unit === 'Bottle') {
+            $bottleUnit = $units->firstWhere('unit_name', 'Bottle');
+        }
+
+        return $bottleUnit;
     }
 
     /**
@@ -185,7 +220,7 @@ class WarehouseStock extends Model
      */
     public function getProfitPercentageForBranch(?int $barId): float
     {
-        $cost = (float) ($this->average_unit_cost > 0 ? $this->average_unit_cost : $this->purchase_price);
+        $cost = $this->getUnitCostForBranch($barId);
         if ($cost <= 0 || ! $barId) {
             return 0;
         }
@@ -199,24 +234,13 @@ class WarehouseStock extends Model
     }
 
     /**
-     * Min/max base-unit selling prices across all configured branches.
+     * Min/max effective selling prices across all branches (shot or bottle per bar).
      */
     public function getSellingPriceRange(): array
     {
-        $baseUnit = $this->relationLoaded('units')
-            ? $this->units->firstWhere('is_base_unit', true)
-            : $this->units()->where('is_base_unit', true)->with('barPrices')->first();
-
-        if (! $baseUnit) {
-            $price = (float) $this->selling_price;
-
-            return ['min' => $price, 'max' => $price, 'has_range' => false];
-        }
-
-        $prices = ($baseUnit->relationLoaded('barPrices') ? $baseUnit->barPrices : $baseUnit->barPrices()->get())
-            ->pluck('selling_price')
-            ->filter(fn ($p) => $p > 0)
-            ->map(fn ($p) => (float) $p);
+        $prices = collect($this->getBranchSellingPricesForDisplay())
+            ->pluck('price')
+            ->filter(fn ($p) => $p > 0);
 
         if ($prices->isEmpty()) {
             $price = (float) $this->selling_price;
@@ -229,6 +253,63 @@ class WarehouseStock extends Model
             'max' => $prices->max(),
             'has_range' => $prices->min() !== $prices->max(),
         ];
+    }
+
+    /**
+     * Per-branch selling price with the unit each bar uses (shot vs bottle).
+     */
+    public function getBranchSellingPricesForDisplay(): array
+    {
+        $bars = Bar::listed()->orderBy('name')->get();
+        $result = [];
+
+        foreach ($bars as $bar) {
+            $price = $this->getSellingPriceForBranch($bar->id);
+            if ($price === null || $price <= 0) {
+                continue;
+            }
+
+            $result[] = [
+                'bar_id' => $bar->id,
+                'bar_name' => $bar->name,
+                'unit' => $this->getSellingUnitLabelForBranch($bar),
+                'price' => $price,
+            ];
+        }
+
+        return $result;
+    }
+
+    public function getSellingUnitLabelForBranch(Bar $bar): string
+    {
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot' && ! $bar->allowsWarehouseTransferUnit('Shot')) {
+            return 'Bottle';
+        }
+
+        return $baseUnit?->unit_name ?? 'Bottle';
+    }
+
+    public function getUnitCostForBranch(?int $barId): float
+    {
+        $bar = $barId ? Bar::find($barId) : null;
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot' && $bar && ! $bar->allowsWarehouseTransferUnit('Shot')) {
+            $bottleUnit = $this->getBottleSellingUnit();
+            if ($bottleUnit && (float) $bottleUnit->purchase_price > 0) {
+                return (float) $bottleUnit->purchase_price;
+            }
+
+            return $this->getUnitCost() * $this->getShotsPerBottle();
+        }
+
+        return $this->getUnitCost();
     }
 
     /**
@@ -293,9 +374,116 @@ class WarehouseStock extends Model
     public function getPotentialProfitForBar($barId): float
     {
         $sellingPrice = $this->getSellingPriceForBranch($barId) ?? $this->selling_price;
-        $cost = $this->getUnitCost();
+        $cost = $this->getUnitCostForBranch($barId);
 
         return ($sellingPrice - $cost) * $this->quantity;
+    }
+
+    /**
+     * Shots per bottle for liquor tracked in shot base units.
+     */
+    public function getShotsPerBottle(): int
+    {
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if (! $baseUnit || $baseUnit->unit_name !== 'Shot') {
+            return 1;
+        }
+
+        $bottleUnit = $this->relationLoaded('units')
+            ? $this->units->first(fn ($u) => $u->unit_name === 'Bottle' && ! $u->is_base_unit)
+            : $this->units()->where('unit_name', 'Bottle')->where('is_base_unit', false)->first();
+
+        if (! $bottleUnit && $this->purchase_unit === 'Bottle') {
+            $bottleUnit = $this->relationLoaded('units')
+                ? $this->units->firstWhere('unit_name', 'Bottle')
+                : $this->units()->where('unit_name', 'Bottle')->first();
+        }
+
+        return max(1, (int) ($bottleUnit?->conversion_factor ?? 25));
+    }
+
+    /**
+     * On-hand stock expressed as whole bottles for display.
+     */
+    public function getStockInBottles(): int
+    {
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot') {
+            return (int) floor($this->quantity / $this->getShotsPerBottle());
+        }
+
+        return (int) $this->quantity;
+    }
+
+    /**
+     * Warehouse availability for stock requests, adjusted per destination bar.
+     */
+    public function getRequestAvailabilityForBar(Bar $bar): array
+    {
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        $baseQty = (float) $this->quantity;
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot' && $bar->name === Bar::LIQUOR_SHOP) {
+            $bottles = $this->getStockInBottles();
+
+            return [
+                'available_quantity' => $bottles,
+                'available_quantity_base' => $baseQty,
+                'stock_unit' => 'Bottles',
+                'is_out_of_stock' => $bottles <= 0,
+            ];
+        }
+
+        if ($baseUnit && $baseUnit->unit_name === 'Shot' && $bar->name === Bar::BAR_B) {
+            return [
+                'available_quantity' => (int) floor($baseQty),
+                'available_quantity_base' => $baseQty,
+                'stock_unit' => 'Shots',
+                'is_out_of_stock' => $baseQty <= 0,
+            ];
+        }
+
+        $unitLabel = $baseUnit?->unit_name ?? 'units';
+
+        return [
+            'available_quantity' => (int) floor($baseQty),
+            'available_quantity_base' => $baseQty,
+            'stock_unit' => $unitLabel,
+            'is_out_of_stock' => $baseQty <= 0,
+        ];
+    }
+
+    /**
+     * Conversion factor for the configured purchase unit (base units per purchase unit).
+     */
+    public function resolvePurchaseConversionFactor(): int
+    {
+        if (! $this->purchase_unit) {
+            return 1;
+        }
+
+        $baseUnit = $this->relationLoaded('units')
+            ? $this->units->firstWhere('is_base_unit', true)
+            : $this->units()->where('is_base_unit', true)->first();
+
+        if ($baseUnit && $this->purchase_unit === $baseUnit->unit_name) {
+            return 1;
+        }
+
+        $purchaseUnitRecord = $this->relationLoaded('units')
+            ? $this->units->where('is_base_unit', false)->firstWhere('unit_name', $this->purchase_unit)
+            : $this->units()->where('is_base_unit', false)->where('unit_name', $this->purchase_unit)->first();
+
+        return max(1, (int) ($purchaseUnitRecord?->conversion_factor ?? 1));
     }
 
     /**
@@ -305,40 +493,102 @@ class WarehouseStock extends Model
     {
         $transaction = $this->transactions()->create($data);
 
-        // Update lifetime quantities
-        if ($transaction->isAddition()) {
-            $this->lifetime_quantity_purchased += $transaction->quantity;
-        } elseif ($transaction->isDeduction()) {
-            $this->lifetime_quantity_sold += abs($transaction->quantity);
-        }
-
-        // Update weighted average cost
         $this->updateWeightedAverageCost();
-
-        // Update lifetime profit estimate
-        $this->lifetime_profit_estimate = $this->calculateLifetimeProfitEstimate();
-        
-        $this->save();
+        $this->syncLifetimeMetricsFromLedger();
 
         return $transaction;
     }
 
     /**
-     * Calculate lifetime profit estimate
+     * Recompute lifetime quantities and profit from the inventory ledger only.
      */
-    protected function calculateLifetimeProfitEstimate(): float
+    public function syncLifetimeMetricsFromLedger(): void
     {
-        $totalRevenue = 0;
-        $totalCost = 0;
+        if (! $this->relationLoaded('transactions')) {
+            $this->load('transactions');
+        }
+
+        $this->lifetime_quantity_purchased = $this->sumLedgerPurchasedQuantity();
+        $this->lifetime_quantity_sold = $this->sumLedgerIssuedQuantity();
+        $this->lifetime_profit_estimate = $this->getNetInventoryPosition();
+        $this->save();
+    }
+
+    public function sumLedgerPurchasedQuantity(): int
+    {
+        if (! $this->relationLoaded('transactions')) {
+            $this->load('transactions');
+        }
+
+        return (int) $this->transactions
+            ->filter(fn ($transaction) => in_array($transaction->transaction_type, ['purchase', 'restock'], true) && $transaction->quantity > 0)
+            ->sum('quantity');
+    }
+
+    public function sumLedgerIssuedQuantity(): int
+    {
+        if (! $this->relationLoaded('transactions')) {
+            $this->load('transactions');
+        }
+
+        $issued = 0;
 
         foreach ($this->transactions as $transaction) {
-            if ($transaction->transaction_type === 'sale') {
-                $totalRevenue += abs($transaction->quantity) * $this->selling_price;
-            } elseif ($transaction->isAddition()) {
-                $totalCost += $transaction->total_cost;
+            if ($transaction->transaction_type === 'sale' && $transaction->quantity < 0) {
+                $issued += abs($transaction->quantity);
+            }
+
+            if ($transaction->transaction_type === 'transfer') {
+                if ($transaction->quantity < 0) {
+                    $issued += abs($transaction->quantity);
+                } else {
+                    $issued = max(0, $issued - $transaction->quantity);
+                }
             }
         }
 
-        return $totalRevenue - $totalCost;
+        return (int) $issued;
+    }
+
+    /**
+     * Profit from stock that has left the warehouse (sales only).
+     */
+    public function getRealizedProfit(): float
+    {
+        if (! $this->relationLoaded('transactions')) {
+            $this->load('transactions');
+        }
+
+        $revenue = 0.0;
+        $cogs = 0.0;
+
+        foreach ($this->transactions as $transaction) {
+            if ($transaction->transaction_type !== 'sale' || $transaction->quantity >= 0) {
+                continue;
+            }
+
+            $quantity = abs($transaction->quantity);
+            $cogs += (float) ($transaction->total_cost ?? ($quantity * (float) $transaction->unit_cost));
+            $revenue += $quantity * (float) $this->selling_price;
+        }
+
+        return $revenue - $cogs;
+    }
+
+    /**
+     * Markup potential on unsold stock still in the warehouse.
+     */
+    public function getUnrealizedProfit(): float
+    {
+        $unitCost = $this->getUnitCost();
+        $stockValue = $this->quantity * (float) $this->selling_price;
+        $costValue = $this->quantity * $unitCost;
+
+        return $stockValue - $costValue;
+    }
+
+    public function getNetInventoryPosition(): float
+    {
+        return $this->getRealizedProfit() + $this->getUnrealizedProfit();
     }
 }

@@ -89,7 +89,10 @@
                                         ->sum();
 
                                     $totalCollected = collect($paymentBreakdown)->sum();
-                                    $expectedCollected = $totalSales - $creditSales - $operationalExpenses;
+                                    // Expected collected is raw receipts from customers
+                                    // (sales minus credit); expenses are only removed in
+                                    // the bankable figure below.
+                                    $expectedCollected = $totalSales - $creditSales;
                                     $collectionVariance = $totalCollected - $expectedCollected;
                                     $bankableBalance = $totalCollected - $operationalExpenses;
                                 @endphp

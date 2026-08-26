@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\StockEntryItem;
 use App\Models\Expense;
 use App\Models\Payment;
@@ -15,8 +15,12 @@ use App\Models\ProductUnit;
 use App\Models\ProductUnitPrice;
 use App\Models\ProductPurchaseHistory;
 use App\Models\InventoryLedger;
+use App\Models\WarehouseStock;
+use App\Models\WarehouseUnit;
+use App\Models\WarehouseUnitBarPrice;
 use App\Models\WarehouseTransferRequest;
 use App\Models\WarehouseTransferRequestItem;
+use App\Models\ActivityLog;
 use App\Services\InventoryService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -29,16 +33,18 @@ class StockEntryController extends Controller
         $user = Auth::user();
         
         if ($user->isSeller()) {
-            $entries = DailyStockEntry::where('bar_id', $user->bar_id)
+            $entries = Sale::where('bar_id', $user->bar_id)
                 ->with(['bar', 'stockEntryItems.item'])
                 ->orderBy('date', 'desc')
                 ->paginate(10);
 
-            $todayEntry = DailyStockEntry::where('bar_id', $user->bar_id)
-                ->whereDate('date', now()->toDateString())
+            $todayEntry = Sale::where('bar_id', $user->bar_id)
+                ->where('status', 'pending')
+                ->orderBy('date', 'desc')
+                ->orderBy('id', 'desc')
                 ->first();
         } else {
-            $entries = DailyStockEntry::with(['bar', 'user', 'stockEntryItems.item'])
+            $entries = Sale::with(['bar', 'user', 'stockEntryItems.item'])
                 ->orderBy('date', 'desc')
                 ->paginate(10);
             $todayEntry = null;
@@ -47,61 +53,88 @@ class StockEntryController extends Controller
         return view('stock-entries.index', compact('entries', 'todayEntry'));
     }
 
-    public function create()
+    /**
+     * Seller shortcut: always load the stock entries index so the seller
+     * can choose to open a new stock sheet or continue an old / pending one.
+     * (Previously this redirected straight to the latest pending entry's edit
+     * page, which returns 403 when that entry is not from today.)
+     */
+    public function sell()
     {
         $user = Auth::user();
-        
-        if ($user->isSeller() && !$user->bar_id) {
-            abort(403, 'Sellers must be assigned to a bar');
+
+        if (!$user->isSeller()) {
+            return redirect()->route('stock-entries.index');
         }
 
-        // Check if entry already exists for today
+        if (!$user->bar_id) {
+            return redirect()->route('seller.dashboard')
+                ->with('error', 'You must be assigned to a bar to sell.');
+        }
+
+        return redirect()->route('stock-entries.index');
+    }
+
+    public function create(Request $request)
+    {
+        $user = Auth::user();
+
+        // Creating a stock sheet always requires a bar context. A seller
+        // without a bar, or a director/manager without an assigned bar,
+        // is redirected instead of crashing on a null bar_id later.
+        if (!$user->bar_id) {
+            return redirect()->route('stock-entries.index')
+                ->with('error', 'You must be assigned to a bar to create a stock sheet.');
+        }
+
+        // If there is an active pending sheet, continue it unless a new stock sheet is requested.
+        $pendingEntry = Sale::where('bar_id', $user->bar_id)
+            ->where('status', 'pending')
+            ->orderBy('date', 'desc')
+            ->orderBy('id', 'desc')
+            ->first();
+
         $today = now()->format('Y-m-d');
-        $existingEntry = DailyStockEntry::where('date', $today)
+        $todayEntry = Sale::where('date', $today)
             ->where('bar_id', $user->bar_id)
             ->first();
 
-        if ($existingEntry) {
-            return redirect()->route('stock-entries.edit', $existingEntry)
-                ->with('info', 'Continue selling for today.');
+        if (! $request->query('new_sheet') && $pendingEntry) {
+            return redirect()->route('stock-entries.edit', $pendingEntry);
         }
 
-        // Get all items with their units
-        $items = Item::with('productUnits')->orderBy('category')->orderBy('name')->get();
+        if ($todayEntry) {
+            return redirect()->route('stock-entries.edit', $todayEntry)
+                ->with('info', 'Today\'s stock sheet already exists. Continue the current sheet or verify it before creating another.');
+        }
+
+        // Get all items with their units in database insertion order
+        $items = Item::with('productUnits')->where('is_hidden', false)->orderBy('id')->get();
         
         // Get approved order requests sum for this bar and date
         $today = now()->format('Y-m-d');
-        $todayApprovedOrders = DB::table('order_request_items')
-            ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
-            ->where('order_requests.bar_id', $user->bar_id)
-            ->where('order_requests.date', $today)
-            ->whereIn('order_requests.status', ['approved', 'partially_approved'])
-            ->groupBy('order_request_items.item_id')
-            ->select('order_request_items.item_id', DB::raw('SUM(order_request_items.approved_quantity) as total_approved'))
-            ->pluck('total_approved', 'item_id')
-            ->toArray();
+        $todayApprovedOrders = $this->getApprovedOrderQuantities($user->bar_id, $today);
+        $pendingOrderItemIds = $this->getPendingOrderItemIds($user->bar_id, $today);
 
-        // Get latest stock for each item for this bar (using unified director_stock)
-        $latestStockData = [];
-        foreach ($items as $item) {
-            $latestStockData[$item->id] = $item->director_stock;
-        }
+        $previousClosingStock = $this->getLatestClosingStockForBar($user->bar_id);
+
+        $todayEntry = Sale::where('date', $today)
+            ->where('bar_id', $user->bar_id)
+            ->with('stockEntryItems')
+            ->first();
+        $todayStockItems = $todayEntry
+            ? $todayEntry->stockEntryItems->keyBy('item_id')
+            : collect();
         
         // Prepare items data with latest stock and units
-        $itemsData = $items->map(function($item) use ($latestStockData, $user, $todayApprovedOrders) {
+        $itemsData = $items->map(function($item) use ($user, $todayApprovedOrders, $previousClosingStock, $todayStockItems, $pendingOrderItemIds) {
             // Get bar-specific price
             $barItemPrice = BarItemPrice::where('bar_id', $user->bar_id)
                 ->where('item_id', $item->id)
                 ->first();
             
-            // Load unit prices for this item
-            $unitPrices = [];
-            foreach ($item->productUnits as $unit) {
-                $unitPrice = ProductUnitPrice::where('item_id', $item->id)
-                    ->where('unit_name', $unit->unit_name)
-                    ->first();
-                $unit->price = $unitPrice;
-            }
+            $visibleUnits = $this->resolveSellerProductUnits($item, $user->bar);
+            $this->attachBarUnitPrices($item, $user->bar_id, $visibleUnits);
 
             $baseUnitCost = $item->average_unit_cost ?? 0;
             if ($baseUnitCost <= 0) {
@@ -111,15 +144,31 @@ class StockEntryController extends Controller
                 }
             }
             
+            $stockItem = $todayStockItems->get($item->id);
+            $previousClosing = (float) ($previousClosingStock[$item->id] ?? 0);
+            $approvedQty = (float) ($todayApprovedOrders[$item->id] ?? 0);
+            $figures = $this->resolveSellerStockFigures($item, $stockItem, $previousClosing, $approvedQty);
+            $figures = $this->enrichSellerItemStockDisplay($item, $user->bar, $figures);
+            
             return [
                 'id' => $item->id,
                 'name' => $item->name,
                 'category' => $item->category,
                 'price' => $barItemPrice ? $barItemPrice->price : $item->price,
                 'purchase_price' => $baseUnitCost,
-                'opening_stock' => $latestStockData[$item->id] ?? 0,
-                'ordered_stock' => $todayApprovedOrders[$item->id] ?? 0,
-                'product_units' => $item->productUnits,
+                'opening_stock' => $figures['opening_stock'],
+                'ordered_stock' => $figures['ordered_stock'],
+                'closing_stock' => $figures['closing_stock'],
+                'available_stock' => $figures['available_stock'],
+                'opening_stock_display' => $figures['opening_stock_display'],
+                'ordered_stock_display' => $figures['ordered_stock_display'],
+                'closing_stock_display' => $figures['closing_stock_display'],
+                'available_stock_display' => $figures['available_stock_display'],
+                'stock_unit' => $figures['stock_unit'],
+                'can_sell' => $figures['available_stock'] > 0,
+                'has_pending_request' => in_array($item->id, $pendingOrderItemIds, true),
+                'product_units' => $visibleUnits,
+                'bar_item_price' => $barItemPrice ? $barItemPrice->price : null,
             ];
         });
         
@@ -171,7 +220,7 @@ class StockEntryController extends Controller
             $inventoryService = new InventoryService();
 
             // Use one daily entry per bar/date (matches DB unique key).
-            $stockEntry = DailyStockEntry::firstOrCreate([
+            $stockEntry = Sale::firstOrCreate([
                 'bar_id' => $user->bar_id,
                 'date' => $entryDate,
             ], [
@@ -181,15 +230,7 @@ class StockEntryController extends Controller
             \Log::info('Daily Stock Entry created with ID: ' . $stockEntry->id);
 
             // Fetch approved orders for this bar and date
-            $approvedOrders = DB::table('order_request_items')
-                ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
-                ->where('order_requests.bar_id', $user->bar_id)
-                ->where('order_requests.date', $entryDate)
-                ->whereIn('order_requests.status', ['approved', 'partially_approved'])
-                ->groupBy('order_request_items.item_id')
-                ->select('order_request_items.item_id', DB::raw('SUM(order_request_items.approved_quantity) as total_approved'))
-                ->pluck('total_approved', 'item_id')
-                ->toArray();
+            $approvedOrders = $this->getApprovedOrderQuantities($user->bar_id, $entryDate);
 
             // Create stock entry items - only process items with actual activity
             $activeItems = collect($validated['items'])->filter(function($itemData) use ($approvedOrders) {
@@ -202,13 +243,16 @@ class StockEntryController extends Controller
             foreach ($activeItems as $index => $itemData) {
                 \Log::info("Processing active item {$index}:", $itemData);
                 $itemId = $itemData['item_id'];
-                $approvedOrderedQty = $approvedOrders[$itemId] ?? 0;
+                $stockItem = StockEntryItem::where('stock_entry_id', $stockEntry->id)
+                    ->where('item_id', $itemId)
+                    ->first();
+                $approvedOrderedQty = $this->resolveOrderedQuantity($itemId, $stockItem, $approvedOrders);
                 $unitName = $itemData['unit_name'] ?? null;
                 
-                // Convert sales to base units if unit_name is provided
-                $salesQuantity = $itemData['sales'] ?? 0;
-                if ($unitName && $salesQuantity > 0) {
-                    $salesQuantity = $inventoryService->convertToBaseUnits($itemId, $salesQuantity, $unitName);
+                $salesInSelectedUnit = (float) ($itemData['sales'] ?? 0);
+                $salesQuantity = $salesInSelectedUnit;
+                if ($unitName && $salesInSelectedUnit > 0) {
+                    $salesQuantity = $inventoryService->convertToBaseUnits($itemId, $salesInSelectedUnit, $unitName);
                 }
                 
                 // Get correct unit price if unit_name is provided
@@ -219,12 +263,12 @@ class StockEntryController extends Controller
                         $unitPrice = $unitPriceModel->selling_price;
                     }
                 }
+
+                $previousSold = $stockItem ? (float) $stockItem->sold_quantity : 0;
+                $available = (float) $itemData['opening_stock'] + $approvedOrderedQty - $previousSold;
+                $this->assertSufficientStock($inventoryService, $itemId, $salesInSelectedUnit, $unitName, $available);
                 
                 try {
-                    $stockItem = StockEntryItem::where('stock_entry_id', $stockEntry->id)
-                        ->where('item_id', $itemId)
-                        ->first();
-
                     if ($stockItem) {
                         $orderedStock = $approvedOrderedQty;
                         $newSoldQuantity = $salesQuantity;
@@ -252,7 +296,7 @@ class StockEntryController extends Controller
                             'closing_stock' => $closingStock,
                             // Preserve historical pricing: add only the new sale value
                             // using the current transaction price.
-                            'sales_amount' => $stockItem->sales_amount + ($newSoldQuantity * $unitPrice),
+                            'sales_amount' => $stockItem->sales_amount + ($salesInSelectedUnit * $unitPrice),
                             'price' => $unitPrice,
                             'purchase_price' => $resolvedPurchasePrice,
                             'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : $stockItem->expiry_date,
@@ -275,7 +319,7 @@ class StockEntryController extends Controller
                                 ? $itemData['closing_stock'] 
                                 : max(0, ($itemData['opening_stock'] + $approvedOrderedQty) - $salesQuantity),
                             'sold_quantity' => $salesQuantity,
-                            'sales_amount' => $salesQuantity * $unitPrice,
+                            'sales_amount' => $salesInSelectedUnit * $unitPrice,
                             'price' => $unitPrice,
                             'purchase_price' => $resolvedPurchasePrice,
                             'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : null,
@@ -341,8 +385,8 @@ class StockEntryController extends Controller
             DB::commit();
 
             if ($user->isSeller() && $entryDate === now()->format('Y-m-d')) {
-                return redirect()->route('stock-entries.index')
-                    ->with('success', 'Sales saved. Tap Continue Selling to record more.');
+                return redirect()->route('stock-entries.edit', $stockEntry)
+                    ->with('success', 'Sales saved.');
             }
             
             return redirect()->route('stock-entries.show', $stockEntry)
@@ -355,7 +399,7 @@ class StockEntryController extends Controller
         }
     }
 
-    public function show(DailyStockEntry $stockEntry, Request $request)
+    public function show(Sale $stockEntry, Request $request)
     {
         $user = Auth::user();
         
@@ -367,18 +411,18 @@ class StockEntryController extends Controller
         $stockEntry->load(['bar', 'user', 'stockEntryItems.item', 'expenses', 'payments']);
 
         // Get all items with pagination and units
-        $allItems = Item::with('productUnits.price')->orderBy('category')->orderBy('name')->paginate(10, ['*'], 'page', $request->get('page', 1));
-        
-        // Get yesterday's closing stock for all items
-        $yesterday = $stockEntry->date->copy()->subDay()->format('Y-m-d');
-        $yesterdayEntry = DailyStockEntry::where('date', $yesterday)
-            ->where('bar_id', $stockEntry->bar_id)
-            ->first();
-        
-        $yesterdayClosingStock = [];
-        if ($yesterdayEntry) {
-            $yesterdayClosingStock = $yesterdayEntry->stockEntryItems->pluck('closing_stock', 'item_id')->toArray();
-        }
+        $allItems = Item::with('productUnits.price')->orderBy('id')->paginate(10, ['*'], 'page', $request->get('page', 1));
+
+        // Carry forward the closing stock from the most recent prior stock
+        // entry (any date before this one) so the displayed opening stock
+        // matches the director stock overview instead of only the previous
+        // calendar day, which can be empty when entries are a day apart.
+        $entryDateStr = $stockEntry->date->format('Y-m-d');
+        $previousClosingStock = $this->getPreviousClosingStockForBar(
+            $stockEntry->bar_id,
+            $entryDateStr,
+            $stockEntry->id
+        );
         
         // Get existing stock entry items data
         $existingItems = $stockEntry->stockEntryItems->keyBy('item_id');
@@ -396,15 +440,20 @@ class StockEntryController extends Controller
             ->pluck('total_approved', 'item_id')
             ->toArray();
         
-        // Merge existing data with all items, always showing price and yesterday's closing stock
-        $itemsData = $allItems->map(function($item) use ($existingItems, $yesterdayClosingStock, $barPrices, $approvedOrders) {
+        // Merge existing data with all items, always showing price and the
+        // most recent prior closing stock.
+        $itemsData = $allItems->map(function($item) use ($existingItems, $previousClosingStock, $barPrices, $approvedOrders, $stockEntry) {
             $stockItem = $existingItems->get($item->id);
+
+            $visibleUnits = $this->resolveSellerProductUnits($item, $stockEntry->bar);
+            $this->attachBarUnitPrices($item, $stockEntry->bar_id, $visibleUnits);
             
             // Use bar-specific price first, then stock snapshot price, then item master price.
             $price = $barPrices[$item->id] ?? ($stockItem ? $stockItem->price : ($item->price ?? 0));
             
-            // Use yesterday's closing stock as opening stock, fallback to stock item data, then 0
-            $openingStock = $yesterdayClosingStock[$item->id] ?? ($stockItem ? $stockItem->opening_stock : 0);
+            // Use the most recent prior closing stock as opening stock,
+            // falling back to the stock item's own opening, then 0.
+            $openingStock = $previousClosingStock[$item->id] ?? ($stockItem ? $stockItem->opening_stock : 0);
             
             // Calculate values based on approved order requests
             $approvedQty = $approvedOrders[$item->id] ?? null;
@@ -427,16 +476,16 @@ class StockEntryController extends Controller
                 'sold_quantity' => $soldQuantity,
                 'sales_amount' => $salesAmount,
                 'has_data' => $stockItem ? true : false,
-                'has_yesterday_data' => isset($yesterdayClosingStock[$item->id]),
+                'has_previous_data' => isset($previousClosingStock[$item->id]),
                 'stock_entry_item' => $stockItem,
-                'product_units' => $item->productUnits,
+                'product_units' => $visibleUnits,
             ];
         });
 
         return view('stock-entries.show', compact('stockEntry', 'itemsData', 'allItems'));
     }
 
-    public function edit(DailyStockEntry $stockEntry)
+    public function edit(Sale $stockEntry)
     {
         $user = Auth::user();
         
@@ -448,76 +497,68 @@ class StockEntryController extends Controller
         $stockEntry->load(['bar', 'user', 'stockEntryItems.item', 'expenses', 'payments']);
 
         // Get all items first (without pagination) to prepare data
-        $allItems = Item::with('productUnits')->orderBy('category')->orderBy('name')->get();
-        
-        // Get yesterday's closing stock for all items
-        $yesterday = $stockEntry->date->copy()->subDay()->format('Y-m-d');
-        $yesterdayEntry = DailyStockEntry::where('date', $yesterday)
-            ->where('bar_id', $stockEntry->bar_id)
-            ->first();
-        
-        $yesterdayClosingStock = [];
-        if ($yesterdayEntry) {
-            $yesterdayClosingStock = $yesterdayEntry->stockEntryItems->pluck('closing_stock', 'item_id')->toArray();
-        }
-        
+        $allItems = Item::with('productUnits')->where('is_hidden', false)->orderBy('id')->get();
+
+        // Carry forward the closing stock from the most recent prior stock
+        // entry (any date before this one) so the seller's opening stock and
+        // "can sell" flag match the director stock overview, which also uses
+        // the latest entry regardless of how many days ago it was recorded.
+        $entryDateStr = $stockEntry->date->format('Y-m-d');
+        $previousClosingStock = $this->getPreviousClosingStockForBar(
+            $stockEntry->bar_id,
+            $entryDateStr,
+            $stockEntry->id
+        );
+
         // Get existing stock entry items data
         $existingItems = $stockEntry->stockEntryItems->keyBy('item_id');
         $barPrices = BarItemPrice::where('bar_id', $stockEntry->bar_id)->pluck('price', 'item_id');
         
         // Get approved order requests sum for this date
         $entryDate = $stockEntry->date->format('Y-m-d');
-        $approvedOrders = DB::table('order_request_items')
-            ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
-            ->where('order_requests.bar_id', $stockEntry->bar_id)
-            ->where('order_requests.date', $entryDate)
-            ->whereIn('order_requests.status', ['approved', 'partially_approved'])
-            ->groupBy('order_request_items.item_id')
-            ->select('order_request_items.item_id', DB::raw('SUM(order_request_items.approved_quantity) as total_approved'))
-            ->pluck('total_approved', 'item_id')
-            ->toArray();
+        $approvedOrders = $this->getApprovedOrderQuantities($stockEntry->bar_id, $entryDate);
+        $pendingOrderItemIds = $this->getPendingOrderItemIds($stockEntry->bar_id, $entryDate);
         
-        // Merge existing data with all items, always showing price and yesterday's closing stock
-        $itemsData = $allItems->map(function($item) use ($existingItems, $yesterdayClosingStock, $barPrices, $approvedOrders) {
+        // Merge existing data with all items, always showing price and the
+        // most recent prior closing stock.
+        $itemsData = $allItems->map(function($item) use ($existingItems, $previousClosingStock, $barPrices, $approvedOrders, $pendingOrderItemIds, $stockEntry) {
             $stockItem = $existingItems->get($item->id);
             
             // Use bar-specific price first, then stock snapshot price, then item master price.
             $price = $barPrices[$item->id] ?? ($stockItem ? $stockItem->price : ($item->price ?? 0));
             
-            // Load unit prices for this item
-            foreach ($item->productUnits as $unit) {
-                $unitPrice = ProductUnitPrice::where('item_id', $item->id)
-                    ->where('unit_name', $unit->unit_name)
-                    ->first();
-                $unit->price = $unitPrice;
-            }
-            
-            // Use unified director_stock as opening stock if no stock entry item is recorded yet
-            $openingStock = $stockItem ? $stockItem->opening_stock : $item->director_stock;
-            
-            // Calculate values based on approved order requests
-            $approvedQty = $approvedOrders[$item->id] ?? null;
-            $orderedStock = $approvedQty !== null ? $approvedQty : ($stockItem ? $stockItem->ordered_stock : 0);
-            
-            $totalStock = $openingStock + $orderedStock;
-            $soldQuantity = $stockItem ? $stockItem->sold_quantity : 0;
-            $closingStock = $stockItem ? $stockItem->closing_stock : ($openingStock + $orderedStock - $soldQuantity);
-            $salesAmount = $stockItem ? $stockItem->sales_amount : ($soldQuantity * $price);
+            $visibleUnits = $this->resolveSellerProductUnits($item, $stockEntry->bar);
+            $this->attachBarUnitPrices($item, $stockEntry->bar_id, $visibleUnits);
+
+            $previousClosing = (float) ($previousClosingStock[$item->id] ?? 0);
+            $approvedQty = (float) ($approvedOrders[$item->id] ?? 0);
+            $figures = $this->resolveSellerStockFigures($item, $stockItem, $previousClosing, $approvedQty);
+            $figures = $this->enrichSellerItemStockDisplay($item, $stockEntry->bar, $figures);
+            $salesAmount = $stockItem ? (float) $stockItem->sales_amount : ($figures['sold_quantity'] * $price);
             
             return [
                 'id' => $item->id,
                 'name' => $item->name,
                 'category' => $item->category,
                 'price' => $price,
-                'opening_stock' => $openingStock,
-                'ordered_stock' => $orderedStock,
-                'total_stock' => $totalStock,
-                'closing_stock' => max(0, $closingStock), // Ensure no negative closing stock
-                'sold_quantity' => $soldQuantity,
-                'product_units' => $item->productUnits,
+                'opening_stock' => $figures['opening_stock'],
+                'ordered_stock' => $figures['ordered_stock'],
+                'total_stock' => $figures['opening_stock'] + $figures['ordered_stock'],
+                'closing_stock' => $figures['closing_stock'],
+                'sold_quantity' => $figures['sold_quantity'],
+                'opening_stock_display' => $figures['opening_stock_display'],
+                'ordered_stock_display' => $figures['ordered_stock_display'],
+                'closing_stock_display' => $figures['closing_stock_display'],
+                'available_stock_display' => $figures['available_stock_display'],
+                'sold_quantity_display' => $figures['sold_quantity_display'],
+                'stock_unit' => $figures['stock_unit'],
+                'product_units' => $visibleUnits,
                 'sales_amount' => $salesAmount,
+                'available_stock' => $figures['available_stock'],
+                'can_sell' => $figures['available_stock'] > 0,
+                'has_pending_request' => in_array($item->id, $pendingOrderItemIds, true),
                 'has_data' => $stockItem ? true : false,
-                'has_yesterday_data' => isset($yesterdayClosingStock[$item->id]),
+                'has_previous_data' => isset($previousClosingStock[$item->id]),
             ];
         });
         
@@ -526,7 +567,7 @@ class StockEntryController extends Controller
         return view('stock-entries.edit', compact('stockEntry', 'paginatedItems'));
     }
 
-    public function update(Request $request, DailyStockEntry $stockEntry)
+    public function update(Request $request, Sale $stockEntry)
     {
         $user = Auth::user();
         
@@ -536,26 +577,26 @@ class StockEntryController extends Controller
         }
 
         // Validation rules
+        // Per-row numeric fields are nullable on purpose: on shared hosting the
+        // POST can be truncated by max_input_vars, dropping the hidden fields of
+        // the last rows. Rows without sales are skipped below anyway, so a
+        // truncated row must never block saving the rows that do have sales.
         $validated = $request->validate([
             'items' => 'required|array|min:1',
             'items.*.item_id' => 'required|exists:items,id',
-            'items.*.price' => 'required|numeric|min:0',
-            'items.*.opening_stock' => 'required|numeric|min:0',
-            'items.*.orders' => 'required|numeric|min:0',
-            'items.*.sales' => 'required|numeric|min:0',
-            'items.*.closing_stock' => 'required|numeric|min:0',
-            'items.*.sales_amount' => 'required|numeric|min:0',
+            'items.*.price' => 'nullable|numeric|min:0',
+            'items.*.opening_stock' => 'nullable|numeric|min:0',
+            'items.*.orders' => 'nullable|numeric|min:0',
+            'items.*.sales' => 'nullable|numeric|min:0',
+            'items.*.closing_stock' => 'nullable|numeric|min:0',
+            'items.*.sales_amount' => 'nullable|numeric|min:0',
             'items.*.unit_name' => 'sometimes|string|nullable', // For multi-unit support
+            'items.*.clear_sales' => 'sometimes|in:0,1', // "x" button flag -> wipe this item's saved sales
         ], [
             'items.required' => 'You must have at least one stock item',
             'items.min' => 'You must have at least one stock item',
             'items.*.item_id.required' => 'Please select an item for each row',
             'items.*.item_id.exists' => 'Selected item is invalid',
-            'items.*.price.required' => 'Price is required for each item',
-            'items.*.opening_stock.required' => 'Opening stock is required for each item',
-            'items.*.orders.required' => 'Orders quantity is required for each item',
-            'items.*.sales.required' => 'Sales quantity is required for each item',
-            'items.*.closing_stock.required' => 'Closing stock is required for each item',
         ]);
 
         DB::beginTransaction();
@@ -565,35 +606,66 @@ class StockEntryController extends Controller
             
             // Fetch approved orders for this bar and date
             $entryDate = $stockEntry->date->format('Y-m-d');
-            $approvedOrders = DB::table('order_request_items')
-                ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
-                ->where('order_requests.bar_id', $stockEntry->bar_id)
-                ->where('order_requests.date', $entryDate)
-                ->whereIn('order_requests.status', ['approved', 'partially_approved'])
-                ->groupBy('order_request_items.item_id')
-                ->select('order_request_items.item_id', DB::raw('SUM(order_request_items.approved_quantity) as total_approved'))
-                ->pluck('total_approved', 'item_id')
-                ->toArray();
+            $approvedOrders = $this->getApprovedOrderQuantities($stockEntry->bar_id, $entryDate);
 
             // Update or Create stock entry items (using updateOrCreate to avoid deleting items on other pages)
             foreach ($validated['items'] as $itemData) {
                 $itemId = $itemData['item_id'];
-                $approvedOrderedQty = $approvedOrders[$itemId] ?? 0;
+                $existingStockItem = StockEntryItem::where('stock_entry_id', $stockEntry->id)
+                    ->where('item_id', $itemId)
+                    ->first();
+                $approvedOrderedQty = $this->resolveOrderedQuantity($itemId, $existingStockItem, $approvedOrders);
                 $unitName = $itemData['unit_name'] ?? null;
                 
-                // Convert sales to base units if unit_name is provided
-                $salesQuantity = $itemData['sales'] ?? 0;
-                if ($unitName && $salesQuantity > 0) {
-                    $salesQuantity = $inventoryService->convertToBaseUnits($itemId, $salesQuantity, $unitName);
+                $salesInSelectedUnit = (float) ($itemData['sales'] ?? 0);
+                $newSalesQuantity = $salesInSelectedUnit;
+                if ($unitName && $salesInSelectedUnit > 0) {
+                    $newSalesQuantity = $inventoryService->convertToBaseUnits($itemId, $salesInSelectedUnit, $unitName);
+                }
+
+                // "clear_sales" is set when the seller pressed the (x) button on a row:
+                // it removes ALL of this item's sales from the shift (quantity + money),
+                // putting the stock back to the full available amount.
+                $clearSales = filter_var($itemData['clear_sales'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+                // Skip untouched rows (no new sales to record and nothing to clear).
+                if (!$clearSales && $newSalesQuantity <= 0) {
+                    continue;
+                }
+
+                $previousSold = $existingStockItem ? (float) $existingStockItem->sold_quantity : 0;
+                $available = (float) ($itemData['opening_stock'] ?? 0) + $approvedOrderedQty - $previousSold;
+
+                // No stock is being sold when clearing, so skip the stock check.
+                if (!$clearSales) {
+                    $this->assertSufficientStock($inventoryService, $itemId, $salesInSelectedUnit, $unitName, $available);
                 }
                 
                 // Get correct unit price if unit_name is provided
-                $unitPrice = $itemData['price'];
+                $unitPrice = $itemData['price'] ?? ($existingStockItem->price ?? 0);
                 if ($unitName) {
                     $unitPriceModel = $inventoryService->getUnitPrice($itemId, $unitName);
                     if ($unitPriceModel) {
                         $unitPrice = $unitPriceModel->selling_price;
                     }
+                }
+
+                $openingStock = (float) ($itemData['opening_stock'] ?? 0);
+                $totalStock = $openingStock + $approvedOrderedQty;
+
+                if ($clearSales) {
+                    // Remove this item's sales entirely: sold 0, money 0, and the full
+                    // opening + ordered quantity is restored to closing stock.
+                    $totalSoldQuantity = 0;
+                    $closingStock = $totalStock;
+                    $itemSalesAmount = 0;
+                } else {
+                    $totalSoldQuantity = $previousSold + $newSalesQuantity;
+                    $closingStock = isset($itemData['closing_stock'])
+                        ? (float) $itemData['closing_stock']
+                        : max(0, $totalStock - $totalSoldQuantity);
+                    $previousSalesAmount = $existingStockItem ? (float) $existingStockItem->sales_amount : 0;
+                    $itemSalesAmount = $previousSalesAmount + ($salesInSelectedUnit * $unitPrice);
                 }
 
                 $stockItem = StockEntryItem::updateOrCreate(
@@ -602,18 +674,15 @@ class StockEntryController extends Controller
                         'item_id' => $itemId,
                     ],
                     [
-                        'opening_stock' => $itemData['opening_stock'],
+                        'opening_stock' => $openingStock,
                         'ordered_stock' => $approvedOrderedQty,
-                        'total_stock' => $itemData['opening_stock'] + $approvedOrderedQty,
-                        // Use the closing_stock from the form if provided (already converted by JavaScript)
-                        'closing_stock' => isset($itemData['closing_stock']) 
-                            ? $itemData['closing_stock'] 
-                            : max(0, ($itemData['opening_stock'] + $approvedOrderedQty) - $salesQuantity),
-                        'sold_quantity' => $salesQuantity,
-                        'sales_amount' => $salesQuantity * $unitPrice,
+                        'total_stock' => $totalStock,
+                        'closing_stock' => $closingStock,
+                        'sold_quantity' => $totalSoldQuantity,
+                        'sales_amount' => $itemSalesAmount,
                         'price' => $unitPrice,
-                        'purchase_price' => $itemData['purchase_price'] ?? 0,
-                        'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : null,
+                        'purchase_price' => $itemData['purchase_price'] ?? ($existingStockItem->purchase_price ?? 0),
+                        'expiry_date' => !empty($itemData['expiry_date']) ? $itemData['expiry_date'] : ($existingStockItem->expiry_date ?? null),
                         'unit_name' => $unitName,
                     ]
                 );
@@ -630,7 +699,7 @@ class StockEntryController extends Controller
                             'bar_id' => $stockEntry->bar_id,
                             'date' => $stockEntry->date,
                             'recorded_by' => $user->id,
-                            'counted' => (int) $itemData['sales'],
+                            'counted' => (int) $stockItem->sold_quantity,
                         ]
                     );
                 }
@@ -638,7 +707,7 @@ class StockEntryController extends Controller
                 // Sync the closing stock back to the Item's unified director_stock
                 $item = Item::find($itemId);
                 if ($item) {
-                    $item->update(['director_stock' => $itemData['closing_stock']]);
+                    $item->update(['director_stock' => $stockItem->closing_stock]);
                 }
             }
 
@@ -678,8 +747,8 @@ class StockEntryController extends Controller
             DB::commit();
 
             if ($user->isSeller() && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d')) {
-                return redirect()->route('stock-entries.index')
-                    ->with('success', 'Sales updated. Tap Continue Selling to record more.');
+                return redirect()->route('stock-entries.edit', $stockEntry)
+                    ->with('success', 'Sales saved.');
             }
             
             return redirect()->route('stock-entries.show', $stockEntry)
@@ -693,13 +762,39 @@ class StockEntryController extends Controller
         }
     }
 
+    public function destroy(Sale $stockEntry)
+    {
+        $user = Auth::user();
+
+        if ($user->isSeller()) {
+            if ($stockEntry->bar_id !== $user->bar_id || $stockEntry->date->format('Y-m-d') !== now()->format('Y-m-d')) {
+                abort(403);
+            }
+        } elseif (!$user->isDirector() && !$user->isManager()) {
+            abort(403);
+        }
+
+        DB::beginTransaction();
+
+        try {
+            $stockEntry->delete();
+            DB::commit();
+
+            return redirect()->route('stock-entries.index')
+                ->with('success', 'Sale deleted successfully.');
+        } catch (\Exception $e) {
+            DB::rollback();
+            return back()->with('error', 'Error deleting sale: ' . $e->getMessage());
+        }
+    }
+
     // Director-specific methods
     public function directorIndex()
     {
         $user = Auth::user();
         
         // Directors can see all stock entries
-        $entries = DailyStockEntry::with(['bar', 'user', 'stockEntryItems.item'])
+        $entries = Sale::with(['bar', 'user', 'stockEntryItems.item'])
             ->orderBy('date', 'desc')
             ->paginate(10);
 
@@ -714,19 +809,20 @@ class StockEntryController extends Controller
         }
 
         $selectedBarId = $request->query('bar_id');
+        $search = trim($request->query('search', ''));
         $bars = Bar::listed()->orderBy('name')->get();
 
-        $stockEntries = StockEntryItem::join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')
+        $stockEntries = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
             ->when($selectedBarId, function ($query) use ($selectedBarId) {
-                $query->where('daily_stock_entries.bar_id', $selectedBarId);
+                $query->where('sales.bar_id', $selectedBarId);
             })
-            ->orderBy('daily_stock_entries.date', 'desc')
+            ->orderBy('sales.date', 'desc')
             ->orderBy('stock_entry_items.updated_at', 'desc')
             ->orderBy('stock_entry_items.id', 'desc')
             ->get([
                 'stock_entry_items.*',
-                'daily_stock_entries.bar_id',
-                'daily_stock_entries.date as stock_date',
+                'sales.bar_id',
+                'sales.date as stock_date',
             ]);
 
         $latestStocks = $stockEntries->groupBy(function ($row) {
@@ -736,8 +832,19 @@ class StockEntryController extends Controller
         $itemIds = $latestStocks->pluck('item_id')->unique()->all();
         $barIds = $latestStocks->pluck('bar_id')->unique()->all();
 
-        $items = Item::whereIn('id', $itemIds)->get()->keyBy('id');
+        $items = Item::with(['productUnits'])->where('is_hidden', false)->whereIn('id', $itemIds)->get()->keyBy('id');
         $barNames = Bar::whereIn('id', $barIds)->pluck('name', 'id');
+
+        $productUnitPrices = ProductUnitPrice::whereIn('item_id', $itemIds)
+            ->get()
+            ->groupBy('item_id')
+            ->map(fn ($group) => $group->keyBy('unit_name'));
+
+        // Drop rows whose item has been hidden (deleted), so it no longer appears
+        // in the director stock overview.
+        $latestStocks = $latestStocks->filter(function ($stock) use ($items) {
+            return $items->has($stock->item_id);
+        })->values();
 
         $barItemPrices = BarItemPrice::whereIn('bar_id', $barIds)
             ->whereIn('item_id', $itemIds)
@@ -747,21 +854,59 @@ class StockEntryController extends Controller
                 return $group->keyBy('item_id');
             });
 
-        $stockRows = $latestStocks->map(function ($stock) use ($items, $barNames, $barItemPrices) {
+        $stockRows = $latestStocks->map(function ($stock) use ($items, $barNames, $barItemPrices, $productUnitPrices) {
             $item = $items->get($stock->item_id);
-            $price = $barItemPrices->get($stock->bar_id)?->get($stock->item_id)?->price ?? ($item?->price ?? 0);
+            $sellingPrice = $barItemPrices->get($stock->bar_id)?->get($stock->item_id)?->price ?? ($item?->price ?? 0);
+            $purchasePrice = $stock->purchase_price > 0
+                ? $stock->purchase_price
+                : ($item?->average_unit_cost ?? 0);
+            $baseUnit = $item?->productUnits->firstWhere('is_base_unit', true);
+            $unit = $baseUnit?->unit_name
+                ?? $item?->productUnits->first()?->unit_name
+                ?? 'Bottle';
+
+            $markupPercentage = $purchasePrice > 0
+                ? (($sellingPrice - $purchasePrice) / $purchasePrice) * 100
+                : 0;
+
+            $itemPrices = $productUnitPrices->get($item?->id);
+            $productUnits = $item?->productUnits->map(function ($u) use ($itemPrices) {
+                $price = $itemPrices?->get($u->unit_name);
+
+                return [
+                    'unit_name' => $u->unit_name,
+                    'selling_price' => (float) ($price?->selling_price ?? 0),
+                    'purchase_price' => (float) ($price?->purchase_price ?? 0),
+                    'conversion_factor' => (int) $u->conversion_factor,
+                    'is_base_unit' => (bool) $u->is_base_unit,
+                ];
+            })->values()->all() ?? [];
 
             return [
+                'bar_id' => $stock->bar_id,
+                'item_id' => $stock->item_id,
                 'bar_name' => $barNames->get($stock->bar_id, 'Unknown'),
                 'item_name' => $item?->name ?? 'Unknown',
                 'category' => $item?->category ?? 'Unknown',
                 'stock' => $stock->closing_stock,
-                'price' => $price,
+                'price' => $purchasePrice,
+                'unit' => $unit,
+                'selling_price' => $sellingPrice,
+                'markup_percentage' => round($markupPercentage, 2),
                 'last_updated' => $stock->stock_date,
+                'product_units' => $productUnits,
             ];
         })->sortBy([['bar_name', 'asc'], ['item_name', 'asc']])->values();
 
-        return view('stock.index', compact('bars', 'stockRows', 'selectedBarId'));
+        if (!empty($search)) {
+            $stockRows = $stockRows->filter(function ($row) use ($search) {
+                return stripos($row['item_name'], $search) !== false ||
+                       stripos($row['category'], $search) !== false ||
+                       stripos($row['bar_name'], $search) !== false;
+            })->values();
+        }
+
+        return view('stock.index', compact('bars', 'stockRows', 'selectedBarId', 'search'));
     }
 
     public function directorCreate()
@@ -804,7 +949,7 @@ class StockEntryController extends Controller
             $date = $request->input('date');
             
             // Create or update daily stock entry
-            $stockEntry = DailyStockEntry::where('date', $date)
+            $stockEntry = Sale::where('date', $date)
                 ->where('bar_id', $barId)
                 ->first();
 
@@ -812,7 +957,7 @@ class StockEntryController extends Controller
                 $stockEntry->updated_at = now();
                 $stockEntry->save();
             } else {
-                $stockEntry = DailyStockEntry::create([
+                $stockEntry = Sale::create([
                     'bar_id' => $barId,
                     'user_id' => $user->id,
                     'date' => $date,
@@ -858,7 +1003,7 @@ class StockEntryController extends Controller
 
             DB::commit();
             
-            return redirect()->route('director-stock-entries.index')
+            return redirect()->route('stock.index')
                 ->with('success', 'Director stock entry saved successfully!');
 
         } catch (\Exception $e) {
@@ -878,10 +1023,10 @@ class StockEntryController extends Controller
 
         $itemsWithStock = $items->map(function($item) use ($barId) {
             // Get current stock for this item and bar from the most recent stock entry
-            $currentStock = StockEntryItem::join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')
-                ->where('daily_stock_entries.bar_id', $barId)
+            $currentStock = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+                ->where('sales.bar_id', $barId)
                 ->where('stock_entry_items.item_id', $item->id)
-                ->orderBy('daily_stock_entries.date', 'desc')
+                ->orderBy('sales.date', 'desc')
                 ->orderBy('stock_entry_items.updated_at', 'desc')
                 ->orderBy('stock_entry_items.id', 'desc')
                 ->value('stock_entry_items.closing_stock') ?? 0;
@@ -1341,13 +1486,13 @@ class StockEntryController extends Controller
             $selectedBarId = request('bar_id', Bar::listed()->orderBy('name')->value('id'));
             
             // Get stock history for this item and bar - include all bars for comparison
-            $stockHistory = StockEntryItem::join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')
-                ->join('bars', 'daily_stock_entries.bar_id', '=', 'bars.id')
+            $stockHistory = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+                ->join('bars', 'sales.bar_id', '=', 'bars.id')
                 ->where('stock_entry_items.item_id', $itemId)
-                ->orderBy('daily_stock_entries.date', 'desc')
-                ->orderBy('daily_stock_entries.created_at', 'desc')
+                ->orderBy('sales.date', 'desc')
+                ->orderBy('sales.created_at', 'desc')
                 ->select([
-                    'daily_stock_entries.date',
+                    'sales.date',
                     'bars.name as bar_name',
                     'bars.id as bar_id',
                     'stock_entry_items.opening_stock',
@@ -1359,7 +1504,7 @@ class StockEntryController extends Controller
                     'stock_entry_items.price',
                     'stock_entry_items.purchase_price',
                     'stock_entry_items.expiry_date',
-                    'daily_stock_entries.created_at'
+                    'sales.created_at'
                 ])
                 ->get();
 
@@ -1385,6 +1530,8 @@ class StockEntryController extends Controller
         DB::beginTransaction();
         
         try {
+            $bar = Bar::findOrFail($request->bar_id);
+
             $transferRequest = WarehouseTransferRequest::create([
                 'bar_id' => $request->bar_id,
                 'requested_by' => auth()->id(),
@@ -1395,6 +1542,27 @@ class StockEntryController extends Controller
 
             foreach ($request->items as $itemData) {
                 $warehouseStock = \App\Models\WarehouseStock::findOrFail($itemData['warehouse_stock_id']);
+
+                if (! empty($itemData['unit_name']) && ! $bar->allowsWarehouseTransferUnit($itemData['unit_name'])) {
+                    throw new \InvalidArgumentException(
+                        "Unit \"{$itemData['unit_name']}\" is not allowed for {$bar->name}. Shot units are only available for Bar B."
+                    );
+                }
+
+                $availability = $warehouseStock->getRequestAvailabilityForBar($bar);
+                if ($availability['is_out_of_stock']) {
+                    throw new \InvalidArgumentException(
+                        "{$warehouseStock->item_name} is out of stock for {$bar->name}."
+                    );
+                }
+
+                $conversionFactor = (int) ($itemData['conversion_factor'] ?? 1);
+                $requestedBase = (int) $itemData['quantity_requested'] * max(1, $conversionFactor);
+                if ($requestedBase > $availability['available_quantity_base']) {
+                    throw new \InvalidArgumentException(
+                        "Not enough warehouse stock for {$warehouseStock->item_name}. Available: {$availability['available_quantity']} {$availability['stock_unit']}."
+                    );
+                }
                 
                 // Find or create the Item based on warehouse stock's item_name
                 $item = \App\Models\Item::where('name', $warehouseStock->item_name)->first();
@@ -1472,4 +1640,941 @@ class StockEntryController extends Controller
             return response()->json(['success' => false, 'message' => 'Error creating warehouse request: ' . $e->getMessage()], 500);
         }
     }
+private function getApprovedOrderQuantities(int $barId, string $date): array
+{
+    $rows = DB::table('order_request_items')
+        ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
+        ->where('order_requests.bar_id', $barId)
+        ->where('order_requests.date', $date)
+        ->whereIn('order_requests.status', ['approved', 'partially_approved'])
+        ->groupBy('order_request_items.item_id')
+        ->select(
+            'order_request_items.item_id',
+            DB::raw('SUM(order_request_items.approved_quantity) as total_approved')
+        )
+        ->get();
+
+    $inventoryService = new InventoryService();
+    $quantities = [];
+
+    foreach ($rows as $row) {
+        $quantities[$row->item_id] = $inventoryService->convertSellerOrderQuantityToBaseUnits(
+            (int) $row->item_id,
+            (float) $row->total_approved
+        );
+    }
+
+    return $quantities;
 }
+
+private function getPendingOrderItemIds(int $barId, string $date): array
+{
+    return DB::table('order_request_items')
+        ->join('order_requests', 'order_request_items.order_request_id', '=', 'order_requests.id')
+        ->where('order_requests.bar_id', $barId)
+        ->where('order_requests.date', $date)
+        ->where('order_requests.status', 'pending')
+        ->where('order_request_items.requested_quantity', '>', 0)
+        ->pluck('order_request_items.item_id')
+        ->unique()
+        ->values()
+        ->all();
+}
+
+private function resolveSellerStockFigures(
+    Item $item,
+    ?StockEntryItem $stockItem,
+    float $previousClosing,
+    float $approvedOrderQty
+): array {
+    if ($stockItem) {
+        $figures = [
+            'opening_stock' => (float) $stockItem->opening_stock,
+            'ordered_stock' => (float) $stockItem->ordered_stock,
+            'sold_quantity' => (float) $stockItem->sold_quantity,
+        ];
+
+        $figures = $this->upgradeLegacyShotStockFigures(
+            $item,
+            $figures,
+            $approvedOrderQty
+        );
+
+        $figures['ordered_stock'] = max(
+            $figures['ordered_stock'],
+            $approvedOrderQty
+        );
+
+        $opening = $figures['opening_stock'];
+        $ordered = $figures['ordered_stock'];
+        $sold = $figures['sold_quantity'];
+        $closing = max(0, $opening + $ordered - $sold);
+
+        return [
+            'opening_stock' => $opening,
+            'ordered_stock' => $ordered,
+            'closing_stock' => $closing,
+            'sold_quantity' => $sold,
+            'available_stock' => max(0, $closing),
+        ];
+    }
+
+    $opening = max(0, $previousClosing);
+    $ordered = $approvedOrderQty;
+    $sold = 0.0;
+    $closing = max(0, $opening + $ordered - $sold);
+
+    return [
+        'opening_stock' => $opening,
+        'ordered_stock' => $ordered,
+        'closing_stock' => $closing,
+        'sold_quantity' => $sold,
+        'available_stock' => max(0, $opening + $ordered),
+    ];
+}
+
+private function getLatestClosingStockForBar(int $barId): array
+{
+    $latestEntry = Sale::where('bar_id', $barId)
+        ->orderBy('date', 'desc')
+        ->orderBy('id', 'desc')
+        ->with('stockEntryItems')
+        ->first();
+
+    if (! $latestEntry) {
+        return [];
+    }
+
+    return $latestEntry->stockEntryItems
+        ->pluck('closing_stock', 'item_id')
+        ->toArray();
+}
+
+/**
+ * Closing stock carried forward from the most recent stock entry that was
+ * recorded BEFORE the given entry. This keeps the seller's opening stock in
+ * sync with the director stock overview (which always shows the latest entry
+ * regardless of date) instead of only looking at the previous calendar day,
+ * which can be empty when entries are a day or more apart.
+ */
+private function getPreviousClosingStockForBar(int $barId, string $currentDate, ?int $currentId = null): array
+{
+    $latestEntry = Sale::where('bar_id', $barId)
+        ->where(function ($query) use ($currentDate, $currentId) {
+            $query->where('date', '<', $currentDate);
+            if ($currentId) {
+                $query->orWhere(function ($query) use ($currentDate, $currentId) {
+                    $query->where('date', $currentDate)
+                        ->where('id', '<', $currentId);
+                });
+            }
+        })
+        ->orderBy('date', 'desc')
+        ->orderBy('id', 'desc')
+        ->with('stockEntryItems')
+        ->first();
+
+    if (! $latestEntry) {
+        return [];
+    }
+
+    return $latestEntry->stockEntryItems
+        ->pluck('closing_stock', 'item_id')
+        ->toArray();
+}
+
+private function upgradeLegacyShotStockFigures(
+    Item $item,
+    array $figures,
+    float $approvedBaseQty
+): array {
+    $inventoryService = new InventoryService();
+
+    $baseUnit = $inventoryService->getBaseUnit($item->id);
+
+    if (! $baseUnit || $baseUnit->unit_name !== 'Shot') {
+        return $figures;
+    }
+
+    $factor = $inventoryService->resolveBottleConversionFactor($item->id);
+
+    if ($factor <= 1) {
+        return $figures;
+    }
+
+    $dbOrdered = (float) ($figures['ordered_stock'] ?? 0);
+    $dbOpening = (float) ($figures['opening_stock'] ?? 0);
+
+    $looksLikeBottleStorage = $factor > 1
+        && $dbOrdered > 0
+        && $dbOrdered < $factor
+        && (
+            ($approvedBaseQty > 0
+                && abs($approvedBaseQty - ($dbOrdered * $factor)) < 0.01)
+            || ($dbOpening > 0 && $dbOpening < $factor)
+        );
+
+    if (! $looksLikeBottleStorage) {
+        if ($approvedBaseQty > $dbOrdered) {
+            $figures['ordered_stock'] = $approvedBaseQty;
+
+            $figures['closing_stock'] = max(
+                0,
+                $figures['opening_stock']
+                    + $approvedBaseQty
+                    - ($figures['sold_quantity'] ?? 0)
+            );
+
+            $figures['available_stock'] = max(
+                0,
+                $figures['closing_stock']
+            );
+        }
+
+        return $figures;
+    }
+
+    foreach (
+        ['opening_stock', 'ordered_stock', 'closing_stock', 'sold_quantity']
+        as $key
+    ) {
+        $value = (float) ($figures[$key] ?? 0);
+
+        if ($value > 0 && $value < $factor) {
+            $figures[$key] = $value * $factor;
+        }
+    }
+
+    $figures['available_stock'] = max(
+        0,
+        $figures['opening_stock']
+            + $figures['ordered_stock']
+            - ($figures['sold_quantity'] ?? 0)
+    );
+
+    $figures['closing_stock'] = $figures['available_stock'];
+
+    return $figures;
+}
+    private function resolveOrderedQuantity(int $itemId, ?StockEntryItem $stockItem, array $approvedOrders): float
+    {
+        $fromOrders = (float) ($approvedOrders[$itemId] ?? 0);
+        $fromEntry = $stockItem ? (float) $stockItem->ordered_stock : 0;
+
+        return max($fromOrders, $fromEntry);
+    }
+
+    private function resolveSellerProductUnits(Item $item, Bar $bar)
+    {
+        $allowed = ['Bottle', 'Shot', 'bottle', 'shot'];
+        $units = $item->productUnits->filter(fn ($unit) => in_array($unit->unit_name, $allowed, true));
+
+        // If no units found, create default bottle unit
+        if ($units->isEmpty()) {
+            $defaultUnit = new \App\Models\ProductUnit([
+                'unit_name' => 'Bottle',
+                'conversion_factor' => 1,
+                'is_base_unit' => true,
+            ]);
+            $defaultUnit->price = (object) ['selling_price' => $item->price];
+            return collect([$defaultUnit]);
+        }
+
+        // Always show all available units for the item, prioritizing base unit
+        return $units->sortByDesc(function ($unit) {
+            return $unit->is_base_unit ? 1 : 0;
+        })->values();
+    }
+
+    private function attachBarUnitPrices(Item $item, int $barId, $units): void
+    {
+        // Cache bar-level price as a fallback (legacy single-price override)
+        $barItemPrice = BarItemPrice::where('bar_id', $barId)
+            ->where('item_id', $item->id)
+            ->first();
+
+        // Pre-load all ProductUnitPrice records for this item so we don't
+        // hit the database once per unit inside the loop.
+        $unitPrices = ProductUnitPrice::where('item_id', $item->id)
+            ->get()
+            ->keyBy(fn ($p) => strtolower($p->unit_name));
+
+        foreach ($units as $unit) {
+            $price = null;
+            $unitKey = strtolower($unit->unit_name);
+
+            // Priority 1: Per-unit price from ProductUnitPrice (most specific —
+            // this is what the director sets when defining each selling unit,
+            // so it must win to show the correct price per Bottle vs Shot).
+            if ($unitPrices->has($unitKey)) {
+                $price = $unitPrices->get($unitKey);
+            }
+            // Priority 2: Bar-level price (legacy single-price override)
+            elseif ($barItemPrice && $barItemPrice->price > 0) {
+                $price = (object) [
+                    'selling_price' => $barItemPrice->price,
+                    'purchase_price' => $item->average_unit_cost ?? 0,
+                ];
+            }
+            // Priority 3: Item's base price
+            elseif ($item->price > 0) {
+                $price = (object) [
+                    'selling_price' => $item->price,
+                    'purchase_price' => $item->average_unit_cost ?? 0,
+                ];
+            }
+            // Priority 4: Zero fallback
+            else {
+                $price = (object) [
+                    'selling_price' => 0,
+                    'purchase_price' => $item->average_unit_cost ?? 0,
+                ];
+            }
+
+            $unit->price = $price;
+        }
+    }
+
+    /**
+     * Update stock quantity for director
+     */
+    public function updateStock(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user->isDirector()) {
+            abort(403);
+        }
+
+        $request->validate([
+            'item_name' => 'required|string',
+            'bar_name' => 'required|string',
+            'new_stock' => 'required|integer|min:0',
+            'category' => 'nullable|string|max:255',
+            'units' => 'required|array|min:1',
+            'units.*.unit_name' => 'required|string|in:Bottle,Shot,Glass,Can,Crate',
+            'units.*.selling_price' => 'required|numeric|min:0',
+            'units.*.purchase_price' => 'nullable|numeric|min:0',
+            'units.*.conversion_factor' => 'nullable|integer|min:1',
+            'units.*.is_base' => 'nullable|in:0,1',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $itemName = $request->input('item_name');
+            $barName = $request->input('bar_name');
+            $newStock = (int) $request->input('new_stock');
+            $category = $request->input('category');
+            $units = $request->input('units');
+
+            // Find the item and bar
+            $item = Item::where('name', $itemName)->first();
+            $bar = Bar::where('name', $barName)->first();
+
+            if (!$item || !$bar) {
+                return back()->with('error', 'Item or bar not found');
+            }
+
+            // Identify the base unit (first row, or the one flagged is_base=1)
+            $baseUnitIndex = 0;
+            foreach ($units as $i => $u) {
+                if (!empty($u['is_base']) && $u['is_base'] == '1') {
+                    $baseUnitIndex = $i;
+                    break;
+                }
+            }
+            $baseUnit = $units[$baseUnitIndex];
+            $baseSellingPrice = (float) $baseUnit['selling_price'];
+            $basePurchasePrice = (float) ($baseUnit['purchase_price'] ?? 0);
+
+            $oldStock = $item->director_stock;
+            $oldPrice = $item->price;
+
+            // Update item master data
+            $item->director_stock = $newStock;
+            $item->price = $baseSellingPrice;
+            if (!empty($category)) {
+                $item->category = $category;
+            }
+            if ($basePurchasePrice > 0) {
+                $item->average_unit_cost = $basePurchasePrice;
+            }
+            $item->save();
+
+            // Update the latest stock entry item for this bar
+            $latestStockEntry = Sale::where('bar_id', $bar->id)
+                ->orderBy('date', 'desc')
+                ->first();
+
+            if ($latestStockEntry) {
+                $stockEntryItem = StockEntryItem::where('stock_entry_id', $latestStockEntry->id)
+                    ->where('item_id', $item->id)
+                    ->first();
+
+                if ($stockEntryItem) {
+                    // Apply the director's new quantity WITHOUT turning the difference
+                    // into sales. The model computes closing_stock as
+                    // opening_stock + ordered_stock - sold_quantity, so we pin the
+                    // ordered amount to make the resulting stock equal $newStock while
+                    // leaving sold_quantity (and recorded sales) untouched.
+                    $openingStock = (float) $stockEntryItem->opening_stock;
+                    $soldQuantity = (float) $stockEntryItem->sold_quantity;
+                    $newOrdered = max(0, $newStock + $soldQuantity - $openingStock);
+
+                    $stockEntryItem->ordered_stock = $newOrdered;
+                    $stockEntryItem->price = $baseSellingPrice;
+                    $stockEntryItem->purchase_price = $basePurchasePrice;
+                    $stockEntryItem->save();
+                }
+            }
+
+            // Update bar item price (this should take priority)
+            BarItemPrice::updateOrCreate(
+                [
+                    'bar_id' => $bar->id,
+                    'item_id' => $item->id,
+                ],
+                [
+                    'price' => $baseSellingPrice,
+                ]
+            );
+
+            // Update product units and their prices
+            foreach ($units as $i => $unitData) {
+                $isBase = ($i === $baseUnitIndex);
+                $conversionFactor = $isBase ? 1 : (int) ($unitData['conversion_factor'] ?? 1);
+
+                ProductUnit::updateOrCreate(
+                    [
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                    ],
+                    [
+                        'conversion_factor' => $conversionFactor,
+                        'is_base_unit' => $isBase,
+                    ]
+                );
+
+                ProductUnitPrice::updateOrCreate(
+                    [
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                    ],
+                    [
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]
+                );
+            }
+
+            // Ensure only the submitted units exist for this item
+            $submittedUnitNames = collect($units)->pluck('unit_name')->map(fn ($n) => strtolower($n))->toArray();
+            ProductUnit::where('item_id', $item->id)
+                ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
+                ->delete();
+            ProductUnitPrice::where('item_id', $item->id)
+                ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
+                ->delete();
+
+            // Sync with warehouse - delete warehouse unit bar prices so BarItemPrice takes priority
+            $warehouseStock = WarehouseStock::where('item_name', $itemName)
+                ->with(['units.barPrices'])
+                ->first();
+
+            if ($warehouseStock) {
+                $warehouseStock->selling_price = $baseSellingPrice;
+                if ($basePurchasePrice > 0) {
+                    $warehouseStock->purchase_price = $basePurchasePrice;
+                }
+                $warehouseStock->save();
+
+                // Get all warehouse unit IDs for this warehouse stock
+                $warehouseUnitIds = $warehouseStock->units->pluck('id')->toArray();
+
+                // Delete warehouse unit bar prices for this bar so BarItemPrice takes priority
+                if (!empty($warehouseUnitIds)) {
+                    WarehouseUnitBarPrice::whereIn('warehouse_unit_id', $warehouseUnitIds)
+                        ->where('bar_id', $bar->id)
+                        ->delete();
+                }
+            }
+
+            // Log the activity
+            $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
+            ActivityLog::log([
+                'action' => 'stock_updated',
+                'description' => "Updated stock for {$item->name} at {$bar->name} from {$oldStock} to {$newStock} and price from {$oldPrice} to {$baseSellingPrice}. Units: {$unitSummary}",
+                'subject_type' => Item::class,
+                'subject_id' => $item->id,
+                'old_values' => ['stock' => $oldStock, 'bar' => $bar->name, 'price' => $oldPrice],
+                'new_values' => ['stock' => $newStock, 'bar' => $bar->name, 'price' => $baseSellingPrice, 'units' => $units],
+            ]);
+
+            DB::commit();
+            return redirect()->route('stock.index')->with('success', 'Stock updated successfully!');
+        } catch (\Exception $e) {
+            DB::rollback();
+            return back()->with('error', 'Error updating stock: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Add new stock for director
+     */
+    public function addStock(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user->isDirector()) {
+            abort(403);
+        }
+
+        $request->validate([
+            'bar_id' => 'required|exists:bars,id',
+            'stock_quantity' => 'required|integer|min:0',
+            'item_name' => 'required|string|max:255',
+            'category' => 'nullable|string|max:255',
+            'units' => 'required|array|min:1',
+            'units.*.unit_name' => 'required|string|in:Bottle,Shot,Glass,Can,Crate',
+            'units.*.selling_price' => 'required|numeric|min:0',
+            'units.*.purchase_price' => 'nullable|numeric|min:0',
+            'units.*.conversion_factor' => 'nullable|integer|min:1',
+            'units.*.is_base' => 'nullable|in:0,1',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $barId = $request->input('bar_id');
+            $stockQuantity = (int) $request->input('stock_quantity');
+            $itemName = trim($request->input('item_name'));
+            $category = $request->input('category', 'Other') ?: 'Other';
+            $units = $request->input('units');
+
+            $bar = Bar::find($barId);
+
+            // Identify the base unit (first row, or the one flagged is_base=1)
+            $baseUnitIndex = 0;
+            foreach ($units as $i => $u) {
+                if (!empty($u['is_base']) && $u['is_base'] == '1') {
+                    $baseUnitIndex = $i;
+                    break;
+                }
+            }
+            $baseUnit = $units[$baseUnitIndex];
+            $basePrice = (float) $baseUnit['selling_price'];
+            $baseCostPrice = (float) ($baseUnit['purchase_price'] ?? 0);
+
+            // Find existing item by name or create a new one
+            $item = Item::where('name', $itemName)->first();
+            $isNewItem = false;
+            
+            if (!$item) {
+                $isNewItem = true;
+                $item = Item::create([
+                    'name' => $itemName,
+                    'category' => $category,
+                    'price' => $basePrice,
+                    'director_stock' => $stockQuantity,
+                    'average_unit_cost' => $baseCostPrice > 0 ? $baseCostPrice : $basePrice,
+                    'lifetime_quantity_purchased' => $stockQuantity,
+                ]);
+
+                // Create ProductUnit + ProductUnitPrice for each unit
+                foreach ($units as $i => $unitData) {
+                    $isBase = ($i === $baseUnitIndex);
+                    $conversionFactor = $isBase ? 1 : (int) ($unitData['conversion_factor'] ?? 1);
+
+                    ProductUnit::create([
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'conversion_factor' => $conversionFactor,
+                        'is_base_unit' => $isBase,
+                    ]);
+
+                    ProductUnitPrice::create([
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]);
+                }
+            } else {
+                $item->director_stock = max($item->director_stock, $stockQuantity);
+                $item->price = $basePrice;
+                $item->save();
+
+                // For existing items, add any NEW units that don't already exist
+                $existingUnits = ProductUnit::where('item_id', $item->id)
+                    ->pluck('unit_name')
+                    ->map(fn ($n) => strtolower($n))
+                    ->toArray();
+
+                foreach ($units as $i => $unitData) {
+                    $unitNameLower = strtolower($unitData['unit_name']);
+                    if (in_array($unitNameLower, $existingUnits)) {
+                        // Update existing price
+                        ProductUnitPrice::updateOrCreate(
+                            ['item_id' => $item->id, 'unit_name' => $unitData['unit_name']],
+                            [
+                                'selling_price' => (float) $unitData['selling_price'],
+                                'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                            ]
+                        );
+                        continue;
+                    }
+
+                    $isBase = ($i === $baseUnitIndex);
+                    $conversionFactor = $isBase ? 1 : (int) ($unitData['conversion_factor'] ?? 1);
+
+                    ProductUnit::create([
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'conversion_factor' => $conversionFactor,
+                        'is_base_unit' => $isBase,
+                    ]);
+
+                    ProductUnitPrice::create([
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]);
+                }
+            }
+
+            // Create or update today's stock entry for the selected bar
+            $today = now()->format('Y-m-d');
+            $stockEntry = Sale::firstOrCreate([
+                'bar_id' => $barId,
+                'date' => $today,
+            ], [
+                'user_id' => $user->id,
+            ]);
+
+            // Update or create stock entry item
+            $stockEntryItem = StockEntryItem::updateOrCreate(
+                [
+                    'stock_entry_id' => $stockEntry->id,
+                    'item_id' => $item->id,
+                ],
+                [
+                    'opening_stock' => $stockQuantity,
+                    'ordered_stock' => 0,
+                    'total_stock' => $stockQuantity,
+                    'closing_stock' => $stockQuantity,
+                    'sold_quantity' => 0,
+                    'sales_amount' => 0,
+                    'price' => $basePrice,
+                    'purchase_price' => $baseCostPrice,
+                ]
+            );
+
+            // Update bar item price (use base unit's selling price)
+            BarItemPrice::updateOrCreate(
+                [
+                    'bar_id' => $barId,
+                    'item_id' => $item->id,
+                ],
+                [
+                    'price' => $basePrice,
+                ]
+            );
+
+            // Log activity
+            $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
+            ActivityLog::log([
+                'action' => $isNewItem ? 'item_created' : 'stock_added',
+                'description' => "Added stock for {$item->name} at {$bar->name}: {$stockQuantity} units. Units: {$unitSummary}",
+                'subject_type' => Item::class,
+                'subject_id' => $item->id,
+                'old_values' => ['bar' => $bar->name],
+                'new_values' => ['stock' => $stockQuantity, 'base_price' => $basePrice, 'bar' => $bar->name, 'units' => $units],
+            ]);
+
+            DB::commit();
+            return redirect()->route('stock.index')->with('success', "Stock added successfully for {$item->name} at {$bar->name}!");
+        } catch (\Exception $e) {
+            DB::rollback();
+            return back()->with('error', 'Error adding stock: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Restock existing item for director (auto-adds to previous stock)
+     */
+    public function restockStock(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user->isDirector()) {
+            abort(403);
+        }
+
+        $request->validate([
+            'item_id' => 'required|integer|exists:items,id',
+            'bar_id' => 'required|integer|exists:bars,id',
+            'item_name' => 'required|string',
+            'bar_name' => 'required|string',
+            'additional_stock' => 'required|integer|min:1',
+            'price' => 'required|numeric|min:0',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            $itemId = (int) $request->input('item_id');
+            $barId = (int) $request->input('bar_id');
+            $additionalStockRaw = (float) $request->input('additional_stock');
+            $price = (float) $request->input('price');
+
+            $item = Item::find($itemId);
+            $bar = Bar::find($barId);
+
+            if (!$item || !$bar) {
+                return back()->with('error', 'Item or bar not found');
+            }
+
+            // The director enters the restock quantity in bottles (just like
+            // seller order quantities), but ordered_stock / closing_stock are
+            // stored in the item's BASE unit (e.g. Shot for spirits). Convert to
+            // base units so the stored stock is consistent with how sales are
+            // validated. Without this, a restock of N bottles is stored as N
+            // base units and selling a single bottle (which converts to
+            // N*factor base units) is rejected as "insufficient stock".
+            $inventoryService = new InventoryService();
+            $additionalStock = $inventoryService->convertSellerOrderQuantityToBaseUnits(
+                $itemId,
+                $additionalStockRaw
+            );
+
+            $oldDirectorStock = (float) $item->director_stock;
+            $newDirectorStock = $oldDirectorStock + $additionalStock;
+            $item->director_stock = $newDirectorStock;
+            $item->price = $price;
+            $item->save();
+
+            // Fetch or create latest daily stock entry
+            $today = now()->format('Y-m-d');
+            $stockEntry = Sale::firstOrCreate([
+                'bar_id' => $bar->id,
+                'date' => $today,
+            ], [
+                'user_id' => $user->id,
+            ]);
+
+            $stockEntryItem = StockEntryItem::where('stock_entry_id', $stockEntry->id)
+                ->where('item_id', $item->id)
+                ->first();
+
+            if ($stockEntryItem) {
+                // The director sees "stock" as the current closing_stock, so the new
+                // stock must be EXACTLY the current closing + the added quantity.
+                $oldClosing = (float) $stockEntryItem->closing_stock;
+                $newClosing = $oldClosing + $additionalStock;
+                $opening = (float) $stockEntryItem->opening_stock;
+                $soldQuantity = (float) $stockEntryItem->sold_quantity;
+
+                // Derive ordered so the identities
+                //   total_stock = opening_stock + ordered_stock
+                //   closing_stock = total_stock - sold_quantity
+                // stay valid while opening / sold are left untouched.
+                $newOrdered = max(0, ($newClosing + $soldQuantity) - $opening);
+
+                // Write the stock fields straight into the model attributes to bypass
+                // the StockEntryItem mutators (which were double-counting the added
+                // quantity / re-deriving sales). This guarantees the new stock equals
+                // old stock + additional, exactly as expected, without creating sales.
+                // NOTE: We MUST use setRawAttributes() here. Manually editing
+                // $stockEntryItem->attributes[...] intends the same thing but fails,
+                // because "attributes" is a protected Eloquent property - accessing
+                // it returns a copy, so the writes throw an "Indirect modification of
+                // overloaded property ... $attributes" error (or silently do nothing).
+                $stockEntryItem->setRawAttributes(array_merge(
+                    $stockEntryItem->getAttributes(),
+                    [
+                        'opening_stock' => $opening,
+                        'ordered_stock' => $newOrdered,
+                        'total_stock'   => $opening + $newOrdered,
+                        'closing_stock' => $newClosing,
+                        'sold_quantity' => $soldQuantity,
+                        'sales_amount'  => (float) $stockEntryItem->sales_amount,
+                    ]
+                ), false);
+                $stockEntryItem->price = $price;
+                $stockEntryItem->save();
+            } else {
+                // No stock entry item for today yet: carry yesterday's closing over as
+                // today's opening so the restock shows as previous stock + added qty
+                // instead of resetting to zero.
+                $previousClosingMap = Sale::where('bar_id', $bar->id)
+                    ->where('date', '<', $today)
+                    ->orderBy('date', 'desc')
+                    ->orderBy('id', 'desc')
+                    ->with('stockEntryItems')
+                    ->first()?->stockEntryItems->pluck('closing_stock', 'item_id')->toArray() ?? [];
+                $oldClosing = (float) ($previousClosingMap[$item->id] ?? 0);
+                $newClosing = $oldClosing + $additionalStock;
+
+                $stockEntryItem = StockEntryItem::create([
+                    'stock_entry_id' => $stockEntry->id,
+                    'item_id' => $item->id,
+                    'opening_stock' => $oldClosing,
+                    'ordered_stock' => $additionalStock,
+                    'total_stock' => $oldClosing + $additionalStock,
+                    'closing_stock' => $newClosing,
+                    'sold_quantity' => 0,
+                    'sales_amount' => 0,
+                    'price' => $price,
+                    'purchase_price' => 0,
+                ]);
+            }
+
+            // Update bar item price
+            BarItemPrice::updateOrCreate(
+                ['bar_id' => $bar->id, 'item_id' => $item->id],
+                ['price' => $price]
+            );
+
+            ProductUnitPrice::where('item_id', $item->id)->update(['selling_price' => $price]);
+
+            // Log activity
+            ActivityLog::log([
+                'action' => 'stock_restocked',
+                'description' => "Restocked {$item->name} at {$bar->name}: added {$additionalStock} units (previous: {$oldClosing}, new stock: {$newClosing}) at MWK {$price}",
+                'subject_type' => Item::class,
+                'subject_id' => $item->id,
+                'old_values' => ['stock' => $oldClosing, 'bar' => $bar->name],
+                'new_values' => ['added_stock' => $additionalStock, 'new_stock' => $newClosing, 'price' => $price, 'bar' => $bar->name],
+            ]);
+
+            DB::commit();
+            return redirect()->route('stock.index')->with('success', "Added {$additionalStock} units to {$item->name} at {$bar->name}!");
+        } catch (\Exception $e) {
+            DB::rollback();
+            return back()->with('error', 'Error restocking item: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Delete stock for director
+     */
+    public function deleteStock(Request $request)
+    {
+        $user = Auth::user();
+        if (!$user->isDirector()) {
+            abort(403);
+        }
+
+        $itemName = $request->query('item');
+        $barName = $request->query('bar');
+
+        if (!$itemName || !$barName) {
+            return back()->with('error', 'Missing item or bar information');
+        }
+
+        DB::beginTransaction();
+        try {
+            $item = Item::where('name', $itemName)->first();
+            $bar = Bar::where('name', $barName)->first();
+
+            if (!$item || !$bar) {
+                return back()->with('error', 'Item or bar not found');
+            }
+
+            // Delete stock entry items for this item and bar
+            $stockEntryItems = StockEntryItem::where('item_id', $item->id)
+                ->whereHas('stockEntry', function($query) use ($bar) {
+                    $query->where('bar_id', $bar->id);
+                })
+                ->get();
+
+            foreach ($stockEntryItems as $stockEntryItem) {
+                $oldStock = $stockEntryItem->closing_stock;
+                $stockEntryItem->delete();
+
+                // Log the activity
+                ActivityLog::log([
+                    'action' => 'stock_deleted',
+                    'description' => "Deleted stock for {$item->name} at {$bar->name}",
+                    'subject_type' => Item::class,
+                    'subject_id' => $item->id,
+                    'old_values' => ['stock' => $oldStock, 'bar' => $bar->name],
+                    'new_values' => ['stock' => 0, 'bar' => $bar->name],
+                ]);
+            }
+
+            // Hide the item so it is removed from the seller UI and the director's
+            // stock overview. Historical records are preserved (the item row is not
+            // deleted), keeping past reports and reconciliations intact.
+            $item->is_hidden = true;
+            $item->save();
+
+            // Delete bar item price
+            BarItemPrice::where('bar_id', $bar->id)
+                ->where('item_id', $item->id)
+                ->delete();
+
+            DB::commit();
+            return redirect()->route('stock.index')->with('success', 'Stock deleted successfully!');
+        } catch (\Exception $e) {
+            DB::rollback();
+            return back()->with('error', 'Error deleting stock: ' . $e->getMessage());
+        }
+    }
+
+    private function enrichSellerItemStockDisplay(Item $item, Bar $bar, array $figures): array
+    {
+        $stockUnit = $this->resolveSellerProductUnits($item, $bar)->first()?->unit_name ?? 'Bottle';
+        $inventoryService = new InventoryService();
+
+        $toDisplay = fn (float $base) => $inventoryService->convertBaseUnitsToSellerDisplay($item->id, $base, $stockUnit);
+
+        $figures['stock_unit'] = $stockUnit;
+        $figures['opening_stock_display'] = $toDisplay($figures['opening_stock']);
+        $figures['ordered_stock_display'] = $toDisplay($figures['ordered_stock']);
+        $figures['closing_stock_display'] = $toDisplay($figures['closing_stock']);
+        $figures['available_stock_display'] = $toDisplay($figures['available_stock']);
+        $figures['sold_quantity_display'] = $toDisplay($figures['sold_quantity'] ?? 0);
+
+        return $figures;
+    }
+
+    private function assertSufficientStock(
+        InventoryService $inventoryService,
+        int $itemId,
+        float $salesInSelectedUnit,
+        ?string $unitName,
+        float $availableBase
+    ): void {
+        if ($salesInSelectedUnit <= 0) {
+            return;
+        }
+
+        $salesBase = $unitName
+            ? $inventoryService->convertToBaseUnits($itemId, $salesInSelectedUnit, $unitName)
+            : $salesInSelectedUnit;
+
+        if ($salesBase > $availableBase + 0.0001) {
+            $unit = $unitName ?: 'unit';
+            $baseUnit = $inventoryService->getBaseUnit($itemId);
+            $baseName = $baseUnit ? $baseUnit->unit_name : 'unit';
+
+            // Build a message that tells the seller exactly how much stock
+            // is available and how much the attempted sale needs, in both
+            // the selected unit and the base (storage) unit.
+            if ($unitName && $unitName !== $baseName) {
+                $availableInUnit = (int) floor(
+                    $inventoryService->convertFromBaseUnits($itemId, max(0, $availableBase), $unitName)
+                );
+                $message = "Cannot sell {$salesInSelectedUnit} {$unit} — only "
+                    . number_format(max(0, $availableBase)) . " {$baseName}(s) available "
+                    . "(need " . number_format($salesBase) . " {$baseName}(s) for {$salesInSelectedUnit} {$unit}). "
+                    . "Max you can sell: {$availableInUnit} {$unit}(s).";
+            } else {
+                $availableWhole = (int) floor(max(0, $availableBase));
+                $message = "Cannot sell {$salesInSelectedUnit} {$unit} — only {$availableWhole} {$baseName}(s) available.";
+            }
+
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'items' => [$message],
+            ]);
+        }
+    }
+}
+

@@ -349,7 +349,7 @@
                             <div class="item-name">{{ $item->item->name }}</div>
                             <div class="item-meta">
                                 <div class="meta-item">
-                                    📦 Stock Entry: {{ $item->stockEntry->bar->name ?? 'N/A' }}
+                                    📦 Sale Record: {{ $item->stockEntry->bar->name ?? 'N/A' }}
                                 </div>
                                 <div class="meta-item">
                                     📅 Expiry: <strong>{{ $item->expiry_date->format('M d, Y') }}</strong>
@@ -388,7 +388,7 @@
                             <div class="item-name">{{ $item->item->name }}</div>
                             <div class="item-meta">
                                 <div class="meta-item">
-                                    📦 Stock Entry: {{ $item->stockEntry->bar->name ?? 'N/A' }}
+                                    📦 Sale Record: {{ $item->stockEntry->bar->name ?? 'N/A' }}
                                 </div>
                                 <div class="meta-item">
                                     📅 Expiry: <strong>{{ $item->expiry_date->format('M d, Y') }}</strong>
@@ -427,7 +427,7 @@
                             <div class="item-name">{{ $item->item->name }}</div>
                             <div class="item-meta">
                                 <div class="meta-item">
-                                    📦 Stock Entry: {{ $item->stockEntry->bar->name ?? 'N/A' }}
+                                    📦 Sale Record: {{ $item->stockEntry->bar->name ?? 'N/A' }}
                                 </div>
                                 <div class="meta-item">
                                     📅 Expiry: <strong>{{ $item->expiry_date->format('M d, Y') }}</strong>

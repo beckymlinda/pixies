@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('payments', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('stock_entry_id')->constrained('daily_stock_entries')->onDelete('cascade');
+            $table->foreignId('stock_entry_id')->constrained('sales')->onDelete('cascade');
             $table->string('type'); // mpamba, airtel, bank, pos
             $table->decimal('amount', 10, 2);
             $table->timestamps();
@@ -28,3 +28,4 @@ return new class extends Migration
         Schema::dropIfExists('payments');
     }
 };
+

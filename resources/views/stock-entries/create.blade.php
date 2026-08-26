@@ -53,6 +53,11 @@
         background: #f1f5f9;
         color: #64748b;
         border-color: #e2e8f0;
+        cursor: not-allowed;
+    }
+    .item-input.unit-select {
+        cursor: pointer;
+        min-width: 120px;
     }
     .sticky-summary {
         position: sticky;
@@ -181,7 +186,7 @@
     <!-- Compact Header -->
     <div class="entry-header d-flex align-items-center justify-content-between shadow-sm">
         <div class="d-flex align-items-center gap-3 flex-wrap">
-            <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Start Selling' : 'New Stock Entry' }}</h1>
+            <h1 class="h4 fw-bold mb-0 text-dark">{{ auth()->user()->isSeller() ? 'Selling' : 'New Sale Record' }}</h1>
             <div class="vr mx-2 d-none d-md-block"></div>
             @if(auth()->user()->bar)
                 <span class="badge bg-dark text-white badge-pill-custom">📍 {{ auth()->user()->bar->name }}</span>
@@ -237,8 +242,8 @@
                                 <th class="text-center" style="width: 10%">Price</th>
                                 <th class="text-center" style="width: 10%">Opening</th>
                                 <th class="text-center" style="width: 10%">Orders</th>
-                                <th class="text-center" style="width: 10%">Sales</th>
                                 <th class="text-center" style="width: 10%">Closing</th>
+                                <th class="text-center" style="width: 10%">Sales</th>
                                 <th class="text-end" style="width: 13%">Subtotal</th>
                             </tr>
                         </thead>
@@ -254,35 +259,52 @@
                                         <input type="hidden" name="items[{{ $index }}][expiry_date]" value="">
                                     </td>
                                     <td data-label="Unit">
-                                        <select name="items[{{ $index }}][unit_name]" class="item-input unit-select" onchange="updatePriceForUnit(this)">
+                                        <select name="items[{{ $index }}][unit_name]" class="item-input unit-select">
                                             @if(isset($item['product_units']) && $item['product_units']->count() > 0)
                                                 @foreach($item['product_units'] as $unit)
-                                                    <option value="{{ $unit->unit_name }}" data-price="{{ $unit->price?->selling_price ?? $item['price'] }}" data-conversion="{{ $unit->conversion_factor }}">
-                                                        {{ $unit->unit_name }} @if($unit->is_base_unit)(base)@endif
+                                                    <option value="{{ $unit->unit_name }}" data-price="{{ $unit->price?->selling_price ?? $item['price'] }}" data-conversion="{{ $unit->conversion_factor }}" @if($unit->unit_name === 'Bottle' || $unit->unit_name === 'bottle') selected @endif>
+                                                        {{ $unit->unit_name }} @if($unit->is_base_unit)(base)@endif - MWK {{ number_format($unit->price?->selling_price ?? $item['price']) }}
                                                     </option>
                                                 @endforeach
                                             @else
-                                                <option value="unit" data-price="{{ $item['price'] }}" data-conversion="1">Unit</option>
+                                                <option value="Bottle" data-price="{{ $item['price'] }}" data-conversion="1" selected>Bottle - MWK {{ number_format($item['price']) }}</option>
                                             @endif
                                         </select>
                                     </td>
                                     <td data-label="Price" class="text-center text-secondary fw-semibold">
-                                        {{ number_format($item['price']) }}
+                                        <span class="price-display">{{ number_format($item['bar_item_price'] ?? $item['price']) }}</span>
                                     </td>
-                                    <td data-label="Opening">
-                                        <input type="number" name="items[{{ $index }}][opening_stock]" class="item-input opening-stock" value="{{ $item['opening_stock'] }}" readonly>
+                                    <td data-label="Opening" class="text-center">
+                                        <input type="hidden" name="items[{{ $index }}][opening_stock]" class="opening-stock" value="{{ $item['opening_stock'] }}">
+                                        <span class="stock-display fw-semibold">{{ number_format($item['opening_stock_display'] ?? $item['opening_stock']) }}</span>
+                                        <div class="small text-muted">{{ $item['stock_unit'] ?? 'units' }}</div>
                                     </td>
-                                    <td data-label="Orders">
-                                        <input type="number" name="items[{{ $index }}][orders]" class="item-input orders" value="{{ $item['ordered_stock'] }}" readonly>
-                                        @if($item['ordered_stock'] > 0)
-                                            <div class="small text-success text-center" style="font-size:0.65rem;">✓ Approved</div>
+                                    <td data-label="Orders" class="text-center">
+                                        <input type="hidden" name="items[{{ $index }}][orders]" class="orders" value="{{ $item['ordered_stock'] }}">
+                                        <span class="stock-display fw-semibold">{{ number_format($item['ordered_stock_display'] ?? $item['ordered_stock']) }}</span>
+                                        <div class="small text-muted">{{ $item['stock_unit'] ?? 'units' }}</div>
+                                        @if(($item['ordered_stock_display'] ?? $item['ordered_stock']) > 0)
+                                            <div class="small text-success" style="font-size:0.65rem;">✓ Approved</div>
+                                        @elseif($item['has_pending_request'] ?? false)
+                                            <div class="small text-warning" style="font-size:0.65rem;">⏳ Awaiting approval</div>
                                         @endif
                                     </td>
-                                    <td data-label="Sales">
-                                        <input type="number" name="items[{{ $index }}][sales]" class="item-input sales" min="0" step="1" value="0">
+                                    <td data-label="Closing" class="text-center">
+                                        <input type="hidden" name="items[{{ $index }}][closing_stock]" class="closing-stock" value="{{ $item['closing_stock'] ?? max(0, $item['opening_stock'] + $item['ordered_stock']) }}">
+                                        <span class="closing-display fw-semibold">{{ number_format($item['closing_stock_display'] ?? $item['closing_stock'] ?? max(0, $item['opening_stock'] + $item['ordered_stock'])) }}</span>
+                                        <div class="small text-muted">{{ $item['stock_unit'] ?? 'units' }}</div>
                                     </td>
-                                    <td data-label="Closing">
-                                        <input type="number" name="items[{{ $index }}][closing_stock]" class="item-input closing-stock" value="{{ max(0, $item['opening_stock'] + $item['ordered_stock']) }}" readonly>
+                                    <td data-label="Sales" class="text-center">
+                                        @if(!($item['can_sell'] ?? true))
+                                            <div class="small text-danger mb-1" style="font-size:0.65rem;">Out of stock — <a href="{{ route('seller.orders.create') }}">request stock</a></div>
+                                            <input type="hidden" name="items[{{ $index }}][sales]" value="0">
+                                            <input type="number" class="item-input sales bg-light" min="0" step="1" value="0" readonly tabindex="-1">
+                                        @else
+                                            <div class="d-flex flex-column align-items-center gap-1">
+                                                <input type="number" name="items[{{ $index }}][sales]" class="item-input sales" min="0" step="1" value="0" data-available-base="{{ $item['available_stock'] ?? ($item['opening_stock'] + $item['ordered_stock']) }}" data-available-display="{{ $item['available_stock_display'] ?? ($item['opening_stock_display'] ?? $item['opening_stock']) + ($item['ordered_stock_display'] ?? $item['ordered_stock']) }}">
+                                                <button type="button" class="btn btn-sm btn-outline-danger delete-sale-btn" title="Delete sale">Clear</button>
+                                            </div>
+                                        @endif
                                     </td>
                                     <td data-label="Subtotal" class="text-end">
                                         <input type="number" name="items[{{ $index }}][sales_amount]" class="item-input sales-amount bg-transparent border-0 text-end fw-bold text-primary" value="0" readonly>
@@ -346,69 +368,99 @@
 </div>
 
 <script>
+function updatePriceForUnit(selectElement) {
+    const row = selectElement.closest('tr');
+    if (!row) return;
+
+    const selectedOption = selectElement.options[selectElement.selectedIndex];
+    const newPrice = parseFloat(selectedOption.dataset.price) || 0;
+
+    const priceInput = row.querySelector('input[name*="[price]"]');
+    if (priceInput) {
+        priceInput.value = newPrice;
+    }
+
+    const priceDisplay = row.querySelector('.price-display');
+    if (priceDisplay) {
+        priceDisplay.textContent = newPrice.toLocaleString();
+    }
+
+    const salesInput = row.querySelector('.sales');
+    if (salesInput) {
+        salesInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    document.addEventListener('input', function(e) {
-        if (e.target.matches('.sales')) {
-            const row = e.target.closest('tr');
-            if (!row) return;
-            
-            const openingStock = parseFloat(row.querySelector('.opening-stock').value) || 0;
-            const orders = parseFloat(row.querySelector('.orders').value) || 0; // readonly, from director approval
-            const sales = parseFloat(row.querySelector('.sales').value) || 0;
-            const unitSelect = row.querySelector('.unit-select');
-            const selectedOption = unitSelect.options[unitSelect.selectedIndex];
-            const price = parseFloat(selectedOption.dataset.price) || parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
-            const conversionFactor = parseFloat(selectedOption.dataset.conversion) || 1;
-            
-            const availableStock = openingStock + orders;
-            
-            // Convert sales to base units for stock calculation
-            const salesInBaseUnits = sales * conversionFactor;
-            
-            if (salesInBaseUnits > availableStock) {
-                const maxSalesInSelectedUnit = Math.floor(availableStock / conversionFactor);
-                e.target.value = maxSalesInSelectedUnit;
-                alert('⚠️ Insufficient stock! Max available: ' + maxSalesInSelectedUnit + ' ' + selectedOption.text);
-                return;
-            }
-            
-            const finalSales = parseFloat(row.querySelector('.sales').value) || 0;
-            const finalSalesInBaseUnits = finalSales * conversionFactor;
-            const closingStock = Math.max(0, availableStock - finalSalesInBaseUnits);
-            row.querySelector('.closing-stock').value = closingStock.toFixed(1);
-            
-            const salesAmount = finalSales * price;
-            row.querySelector('.sales-amount').value = salesAmount.toFixed(0);
-            
-            updateTotals();
+    // Ensure unit dropdowns are clickable
+    document.querySelectorAll('.unit-select').forEach(select => {
+        select.style.pointerEvents = 'auto';
+        select.style.cursor = 'pointer';
+    });
+
+    document.addEventListener('change', function(e) {
+        if (e.target.matches('.unit-select')) {
+            updatePriceForUnit(e.target);
         }
     });
 
-    function updatePriceForUnit(selectElement) {
-        const row = selectElement.closest('tr');
-        const selectedOption = selectElement.options[selectElement.selectedIndex];
-        const newPrice = parseFloat(selectedOption.dataset.price) || 0;
-        
-        // Update the hidden price field
-        const priceInput = row.querySelector('input[name*="[price]"]');
-        if (priceInput) {
-            priceInput.value = newPrice;
+    document.addEventListener('input', function(e) {
+        if (e.target.matches('.sales')) {
+            updateSaleRow(e.target.closest('tr'));
         }
-        
-        // Update the displayed price
-        const priceCell = row.querySelector('td[data-label="Price"]');
-        if (priceCell) {
-            priceCell.textContent = newPrice.toLocaleString();
+    });
+
+    document.addEventListener('click', function(e) {
+        if (e.target.matches('.delete-sale-btn')) {
+            const row = e.target.closest('tr');
+            if (!row) return;
+            const salesInput = row.querySelector('.sales');
+            if (!salesInput) return;
+            salesInput.value = 0;
+            updateSaleRow(row);
         }
-        
-        // Recalculate sales amount if there's already a sales value
-        const salesInput = row.querySelector('.sales');
-        if (salesInput && parseFloat(salesInput.value) > 0) {
-            const sales = parseFloat(salesInput.value);
-            const salesAmount = sales * newPrice;
-            row.querySelector('.sales-amount').value = salesAmount.toFixed(0);
-            updateTotals();
+    });
+
+    function updateSaleRow(row) {
+        if (!row) return;
+
+        const openingStock = parseFloat(row.querySelector('.opening-stock').value) || 0;
+        const orders = parseFloat(row.querySelector('.orders').value) || 0;
+        const sales = parseFloat(row.querySelector('.sales').value) || 0;
+        const unitSelect = row.querySelector('.unit-select');
+        const selectedOption = unitSelect.options[unitSelect.selectedIndex];
+        const price = parseFloat(selectedOption.dataset.price) || parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
+        const conversionFactor = parseFloat(selectedOption.dataset.conversion) || 1;
+
+        const availableStock = openingStock + orders;
+        const salesInBaseUnits = sales * conversionFactor;
+
+        if (salesInBaseUnits > availableStock) {
+            const maxSalesInSelectedUnit = Math.floor(availableStock / conversionFactor);
+            row.querySelector('.sales').value = maxSalesInSelectedUnit;
+            alert('Insufficient stock. Max available: ' + maxSalesInSelectedUnit + ' ' + selectedOption.text.trim() + '.');
         }
+
+        const finalSales = parseFloat(row.querySelector('.sales').value) || 0;
+        const finalSalesInBaseUnits = finalSales * conversionFactor;
+        const closingStock = Math.max(0, availableStock - finalSalesInBaseUnits);
+        row.querySelector('.closing-stock').value = Number.isInteger(closingStock) ? closingStock : closingStock.toFixed(1);
+
+        const closingDisplay = row.querySelector('.closing-display');
+        if (closingDisplay) {
+            const displayClosing = conversionFactor > 1
+                ? Math.floor(closingStock / conversionFactor)
+                : closingStock;
+            closingDisplay.textContent = Number(displayClosing).toLocaleString();
+        }
+
+        const salesAmount = finalSales * price;
+        const salesAmountInput = row.querySelector('.sales-amount');
+        if (salesAmountInput) {
+            salesAmountInput.value = salesAmount.toFixed(0);
+        }
+
+        updateTotals();
     }
 
     function updateTotals() {

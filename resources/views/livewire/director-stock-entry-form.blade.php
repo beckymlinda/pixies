@@ -25,7 +25,7 @@
     <!-- Header Section -->
     <div class="bg-white shadow-sm border-b">
         <div class="px-4 py-4">
-            <h1 class="text-xl font-bold text-gray-900">Director Daily Stock Entry</h1>
+            <h1 class="text-xl font-bold text-gray-900">Director Daily Sales Entry</h1>
             
             <div class="mt-3 grid grid-cols-1 gap-3">
                 <div>
@@ -339,7 +339,7 @@
                 <div class="flex gap-2">
                     <button type="submit" 
                             class="flex-1 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 text-lg">
-                        💾 Save Director Stock Entry
+                        💾 Save Director Sales Entry
                     </button>
                     
                     <button type="button" 

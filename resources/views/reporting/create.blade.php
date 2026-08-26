@@ -60,8 +60,8 @@
     <!-- Modern Header -->
     <div class="reporting-header d-flex align-items-center justify-content-between shadow-sm">
         <div>
-            <h1 class="h4 fw-bold mb-1 text-dark">Shift Report</h1>
-            <p class="text-muted small mb-0">Record cash, payments, and shift expenditure to close your day.</p>
+            <h1 class="h4 fw-bold mb-1 text-dark">Balance</h1>
+            <p class="text-muted small mb-0">Record payments and shift expenditure to close your day.</p>
         </div>
         <div class="d-flex gap-2">
             <span class="badge bg-light text-dark border border-secondary border-opacity-10 px-3 py-2 rounded-pill">
@@ -103,62 +103,46 @@
             </div>
         </div>
 
-        <form method="POST" action="{{ $existingReport ? route('reporting.update', $existingReport) : route('reporting.store') }}" id="reportingForm">
+        <form method="POST" action="{{ $existingReport ? route('reporting.update', $existingReport) : route('reporting.store') }}" id="reportingForm" enctype="multipart/form-data">
             @csrf
             @if($existingReport) @method('PUT') @endif
             <input type="hidden" name="total_sales" value="{{ $totalSales }}">
 
             <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
-                <div class="card-header bg-white py-3 border-bottom">
-                    <h5 class="fw-bold mb-0 text-dark">Cash & Payments</h5>
+                <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
+                    <h5 class="fw-bold mb-0 text-dark">Pay Through</h5>
+                    <button type="button" class="btn btn-sm btn-primary rounded-pill px-3" onclick="addPaymentRow()">
+                        <i class="bi bi-plus-lg me-1"></i>Add Method
+                    </button>
                 </div>
                 <div class="card-body p-4">
-                    <!-- Physical Cash -->
-                    <div class="row mb-5">
-                        <div class="col-md-5">
-                            <label class="form-label fw-bold text-dark mb-2">Physical Cash in Hand</label>
-                            <div class="input-group">
-                                <span class="input-group-text-modern px-3">MWK</span>
-                                <input type="number" id="cash_in_hand" name="cash_in_hand" class="form-control form-control-modern fw-bold text-dark" 
-                                       value="{{ old('cash_in_hand', $existingReport->cash_in_hand ?? 0) }}" required>
-                            </div>
-                            <small class="text-muted mt-2 d-block">The actual physical cash you have counted in the drawer.</small>
-                        </div>
-                    </div>
-
-                    <!-- Other Payment Methods -->
-                    <div class="d-flex justify-content-between align-items-center mb-4">
-                        <h6 class="fw-bold text-dark mb-0">Non-Cash Payments (Mobile Money, etc.)</h6>
-                        <button type="button" class="btn btn-sm btn-primary rounded-pill px-3" onclick="addPaymentRow()">
-                            <i class="bi bi-plus-lg me-1"></i>Add Method
-                        </button>
-                    </div>
-
                     <div id="paymentsContainer">
-                        @if($existingReport && $existingReport->payments->count() > 0)
-                            @foreach($existingReport->payments as $index => $payment)
+                        @if(count($balancePayments) > 0)
+                            @foreach($balancePayments as $index => $payment)
                                 <div class="payment-row-modern" data-index="{{ $index }}">
                                     <div class="row align-items-end g-3">
                                         <div class="col-md-4">
-                                            <label class="small fw-bold text-secondary mb-1">Method</label>
+                                            <label class="small fw-bold text-secondary mb-1">Pay Through</label>
                                             <select name="payments[{{ $index }}][payment_method]" class="form-select form-control-modern payment-method" required>
                                                 @foreach($paymentMethods as $value => $label)
-                                                    <option value="{{ $value }}" {{ $payment->payment_method == $value ? 'selected' : '' }}>{{ $label }}</option>
+                                                    <option value="{{ $value }}" {{ ($payment['payment_method'] ?? '') == $value ? 'selected' : '' }}>{{ $label }}</option>
                                                 @endforeach
                                             </select>
                                         </div>
-                                        <div class="col-md-3">
+                                        <div class="col-md-7">
                                             <label class="small fw-bold text-secondary mb-1">Amount</label>
                                             <div class="input-group">
                                                 <span class="input-group-text-modern">MWK</span>
-                                                <input type="number" name="payments[{{ $index }}][amount]" class="form-control form-control-modern payment-amount fw-bold" 
-                                                       value="{{ $payment->amount }}" required>
+                                                <input type="text" name="payments[{{ $index }}][amount]" class="form-control form-control-modern payment-amount fw-bold"
+                                                       value="{{ old("payments.{$index}.amount", $payment['amount_display'] ?? $payment['amount'] ?? '') }}"
+                                                       placeholder="{{ ($payment['payment_method'] ?? '') === 'Cash' ? '10000' : '2000, 3000, 5000' }}" required>
                                             </div>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="small fw-bold text-secondary mb-1">Reference/Note</label>
-                                            <input type="text" name="payments[{{ $index }}][description]" class="form-control form-control-modern" 
-                                                   value="{{ $payment->description }}" placeholder="e.g. Transaction ID">
+                                            <small class="payment-comma-hint text-muted {{ ($payment['payment_method'] ?? 'Cash') === 'Cash' ? 'd-none' : '' }}" style="font-size:0.7rem;">Comma-separate multiple receipts (e.g. 2000, 3000, 5000)</small>
+                                            <div class="payment-line-total mt-1 d-none">
+                                                <span class="badge bg-dark text-white fw-bold px-3 py-2 fs-6 shadow-sm border border-secondary">
+                                                    <i class="bi bi-wallet2 text-warning me-1"></i> Total: MWK <span class="payment-line-total-val text-warning fw-bolder">0</span>
+                                                </span>
+                                            </div>
                                         </div>
                                         <div class="col-md-1 text-end">
                                             <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removePaymentRow(this)">
@@ -172,24 +156,25 @@
                              <div class="payment-row-modern" data-index="0">
                                 <div class="row align-items-end g-3">
                                     <div class="col-md-4">
-                                        <label class="small fw-bold text-secondary mb-1">Method</label>
+                                        <label class="small fw-bold text-secondary mb-1">Pay Through</label>
                                         <select name="payments[0][payment_method]" class="form-select form-control-modern payment-method" required>
-                                            <option value="">Select Method</option>
                                             @foreach($paymentMethods as $value => $label)
-                                                <option value="{{ $value }}">{{ $label }}</option>
+                                                <option value="{{ $value }}" {{ $value === 'Cash' ? 'selected' : '' }}>{{ $label }}</option>
                                             @endforeach
                                         </select>
                                     </div>
-                                    <div class="col-md-3">
+                                    <div class="col-md-7">
                                         <label class="small fw-bold text-secondary mb-1">Amount</label>
                                         <div class="input-group">
                                             <span class="input-group-text-modern">MWK</span>
-                                            <input type="number" name="payments[0][amount]" class="form-control form-control-modern payment-amount fw-bold" placeholder="0" required>
+                                            <input type="text" name="payments[0][amount]" class="form-control form-control-modern payment-amount fw-bold" placeholder="10000" required>
                                         </div>
-                                    </div>
-                                    <div class="col-md-4">
-                                        <label class="small fw-bold text-secondary mb-1">Reference/Note</label>
-                                        <input type="text" name="payments[0][description]" class="form-control form-control-modern" placeholder="Optional notes">
+                                        <small class="payment-comma-hint text-muted d-none" style="font-size:0.7rem;">Comma-separate multiple receipts (e.g. 2000, 3000, 5000)</small>
+                                        <div class="payment-line-total mt-1 d-none">
+                                            <span class="badge bg-dark text-white fw-bold px-3 py-2 fs-6 shadow-sm border border-secondary">
+                                                <i class="bi bi-wallet2 text-warning me-1"></i> Total: MWK <span class="payment-line-total-val text-warning fw-bolder">0</span>
+                                            </span>
+                                        </div>
                                     </div>
                                     <div class="col-md-1 text-end">
                                         <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removePaymentRow(this)">
@@ -208,7 +193,7 @@
                 <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
                     <div>
                         <h5 class="fw-bold mb-0 text-dark">Expenditure</h5>
-                        <p class="small text-muted mb-0">Cash paid out during the shift. Debt entries become credit sales.</p>
+                        <p class="small text-muted mb-0">Cash paid out during the shift. Ngongole entries become credit sales.</p>
                     </div>
                     <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3" onclick="addExpenditureRow()">
                         <i class="bi bi-plus-lg me-1"></i>Add Line
@@ -232,8 +217,12 @@
                                         <input type="number" name="expenditures[{{ $index }}][amount]" class="form-control form-control-modern expenditure-amount fw-bold" value="{{ $exp['amount'] ?? '' }}" min="0" step="0.01">
                                     </div>
                                     <div class="col-md-5">
-                                        <label class="small fw-bold text-secondary mb-1">Notes <span class="text-muted fw-normal">(required for debt — who borrowed?)</span></label>
-                                        <input type="text" name="expenditures[{{ $index }}][notes]" class="form-control form-control-modern expenditure-notes" value="{{ $exp['notes'] ?? '' }}" placeholder="e.g. John borrowed beers on tab">
+                                        <label class="small fw-bold text-secondary mb-1">Notes</label>
+                                        <input type="text" name="expenditures[{{ $index }}][notes]" class="form-control form-control-modern expenditure-notes" value="{{ $exp['notes'] ?? '' }}" placeholder="What was damaged?">
+                                    </div>
+                                    <div class="col-md-12 damage-photo-wrap {{ ($exp['type'] ?? '') === 'damages' ? '' : 'd-none' }}">
+                                        <label class="small fw-bold text-secondary mb-1">Photo of Damaged Goods</label>
+                                        <input type="file" name="expenditures[{{ $index }}][photo]" class="form-control form-control-modern damage-photo-input" accept="image/*">
                                     </div>
                                     <div class="col-md-1 text-end">
                                         <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)"><i class="bi bi-trash3-fill"></i></button>
@@ -241,7 +230,7 @@
                                 </div>
                             </div>
                         @empty
-                            <p class="text-muted small mb-0" id="noExpenditureHint">No expenditure recorded yet. Add lunch, water, taxi, debt, etc.</p>
+                            <p class="text-muted small mb-0" id="noExpenditureHint">No expenditure recorded yet. Add lunch, transport, damages, or Ngongole.</p>
                         @endforelse
                     </div>
                 </div>
@@ -270,7 +259,7 @@
                                     <div class="h5 mb-0 fw-bold text-warning"><span class="small opacity-50">MWK</span> <span id="operationalSpend">0</span></div>
                                 </div>
                                 <div class="col-6 col-md-4">
-                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">New Credit (Debt)</div>
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Ngongole</div>
                                     <div class="h5 mb-0 fw-bold text-info"><span class="small opacity-50">MWK</span> <span id="newDebt">0</span></div>
                                 </div>
                                 <div class="col-6 col-md-4">
@@ -300,7 +289,7 @@
 </div>
 
 <script>
-let paymentRowIndex = {{ $existingReport ? $existingReport->payments->count() : 1 }};
+let paymentRowIndex = {{ count($balancePayments) > 0 ? count($balancePayments) : 1 }};
 let expenditureRowIndex = {{ count($shiftExpenditures) > 0 ? count($shiftExpenditures) : 0 }};
 const totalSales = parseFloat('{{ $totalSales }}') || 0;
 const existingCredit = parseFloat('{{ $baseCreditSales ?? $creditSales ?? 0 }}') || 0;
@@ -326,19 +315,83 @@ function addExpenditureRow() {
             </div>
             <div class="col-md-5">
                 <label class="small fw-bold text-secondary mb-1">Notes</label>
-                <input type="text" name="expenditures[${idx}][notes]" class="form-control form-control-modern expenditure-notes" placeholder="Description or customer name for debt">
+                <input type="text" name="expenditures[${idx}][notes]" class="form-control form-control-modern expenditure-notes" placeholder="Details or customer name">
+            </div>
+            <div class="col-md-12 damage-photo-wrap d-none">
+                <label class="small fw-bold text-secondary mb-1">Photo of Damaged Goods</label>
+                <input type="file" name="expenditures[${idx}][photo]" class="form-control form-control-modern damage-photo-input" accept="image/*">
             </div>
             <div class="col-md-1 text-end">
                 <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removeExpenditureRow(this)"><i class="bi bi-trash3-fill"></i></button>
             </div>
         </div>`;
-    container.appendChild(div);
+    container.insertBefore(div, container.firstChild);
     attachListeners();
+    toggleDamagePhoto(div);
+    div.querySelector('.expenditure-amount')?.focus();
+}
+
+function toggleDamagePhoto(row) {
+    const type = row.querySelector('.expenditure-type')?.value;
+    const wrap = row.querySelector('.damage-photo-wrap');
+    const input = row.querySelector('.damage-photo-input');
+    if (!wrap) return;
+    if (type === 'damages') {
+        wrap.classList.remove('d-none');
+        if (input) input.required = true;
+    } else {
+        wrap.classList.add('d-none');
+        if (input) {
+            input.required = false;
+            input.value = '';
+        }
+    }
 }
 
 function removeExpenditureRow(btn) {
     btn.closest('.expenditure-row').remove();
     updateCalculations();
+}
+
+function parsePaymentInputValue(raw) {
+    const text = String(raw || '').trim();
+    if (text.includes(',')) {
+        return text.split(',').reduce((sum, part) => sum + (parseFloat(part.trim().replace(/[^\d.]/g, '')) || 0), 0);
+    }
+    return parseFloat(text.replace(/[^\d.]/g, '')) || 0;
+}
+
+function updatePaymentRowHints(row) {
+    const method = row.querySelector('.payment-method')?.value;
+    const input = row.querySelector('.payment-amount');
+    const hint = row.querySelector('.payment-comma-hint');
+    const totalWrap = row.querySelector('.payment-line-total');
+    const totalSpan = row.querySelector('.payment-line-total-val') || row.querySelector('.payment-line-total span');
+    const isCash = method === 'Cash';
+    if (input) {
+        input.placeholder = isCash ? '10000' : '2000, 3000, 5000';
+    }
+    if (hint) {
+        hint.classList.toggle('d-none', isCash);
+    }
+    if (totalWrap && totalSpan && input) {
+        const textVal = String(input.value || '').trim();
+        const total = parsePaymentInputValue(textVal);
+        if (!isCash && (textVal.includes(',') || total > 0)) {
+            totalWrap.classList.remove('d-none');
+            totalSpan.textContent = total.toLocaleString();
+        } else {
+            totalWrap.classList.add('d-none');
+        }
+    }
+}
+
+function onPaymentMethodChange(e) {
+    const row = e.target.closest('.payment-row-modern');
+    if (row) {
+        updatePaymentRowHints(row);
+        updateCalculations();
+    }
 }
 
 function addPaymentRow() {
@@ -351,22 +404,23 @@ function addPaymentRow() {
     div.innerHTML = `
         <div class="row align-items-end g-3">
             <div class="col-md-4">
-                <label class="small fw-bold text-secondary mb-1">Method</label>
+                <label class="small fw-bold text-secondary mb-1">Pay Through</label>
                 <select name="payments[${paymentRowIndex}][payment_method]" class="form-select form-control-modern payment-method" required>
-                    <option value="">Select Method</option>
                     ${Object.entries(paymentMethods).map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}
                 </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-7">
                 <label class="small fw-bold text-secondary mb-1">Amount</label>
                 <div class="input-group">
                     <span class="input-group-text-modern">MWK</span>
-                    <input type="number" name="payments[${paymentRowIndex}][amount]" class="form-control form-control-modern payment-amount fw-bold" required>
+                    <input type="text" name="payments[${paymentRowIndex}][amount]" class="form-control form-control-modern payment-amount fw-bold" placeholder="2000, 3000, 5000" required>
                 </div>
-            </div>
-            <div class="col-md-4">
-                <label class="small fw-bold text-secondary mb-1">Reference/Note</label>
-                <input type="text" name="payments[${paymentRowIndex}][description]" class="form-control form-control-modern" placeholder="Optional notes">
+                <small class="payment-comma-hint text-muted" style="font-size:0.7rem;">Comma-separate multiple receipts (e.g. 2000, 3000, 5000)</small>
+                <div class="payment-line-total mt-1 d-none">
+                    <span class="badge bg-dark text-white fw-bold px-3 py-2 fs-6 shadow-sm border border-secondary">
+                        <i class="bi bi-wallet2 text-warning me-1"></i> Total: MWK <span class="payment-line-total-val text-warning fw-bolder">0</span>
+                    </span>
+                </div>
             </div>
             <div class="col-md-1 text-end">
                 <button type="button" class="btn btn-outline-danger border-0 rounded-circle" onclick="removePaymentRow(this)">
@@ -375,13 +429,15 @@ function addPaymentRow() {
             </div>
         </div>
     `;
-    container.appendChild(div);
+    container.insertBefore(div, container.firstChild);
     paymentRowIndex++;
     attachListeners();
+    updatePaymentRowHints(div);
+    div.querySelector('.payment-amount')?.focus();
 }
 
 function removePaymentRow(btn) {
-    const rows = document.querySelectorAll('.payment-row-modern');
+    const rows = document.querySelectorAll('#paymentsContainer .payment-row-modern');
     if (rows.length > 1) {
         btn.closest('.payment-row-modern').remove();
         updateCalculations();
@@ -389,11 +445,11 @@ function removePaymentRow(btn) {
 }
 
 function updateCalculations() {
-    const cashInHand = parseFloat(document.getElementById('cash_in_hand').value) || 0;
-
-    let otherPayments = 0;
+    let totalCollected = 0;
     document.querySelectorAll('.payment-amount').forEach(input => {
-        otherPayments += parseFloat(input.value) || 0;
+        totalCollected += parsePaymentInputValue(input.value);
+        const row = input.closest('.payment-row-modern');
+        if (row) updatePaymentRowHints(row);
     });
 
     let operationalSpend = 0;
@@ -406,8 +462,9 @@ function updateCalculations() {
     });
 
     const totalCredit = existingCredit + newDebt;
-    const expectedCollected = totalSales - totalCredit - operationalSpend;
-    const totalCollected = cashInHand + otherPayments;
+    // Expected collected is raw receipts from customers (sales minus credit);
+    // expenses are only removed in the bankable figure below.
+    const expectedCollected = totalSales - totalCredit;
     const variance = totalCollected - expectedCollected;
     const bankable = totalCollected - operationalSpend;
 
@@ -429,16 +486,31 @@ function updateCalculations() {
 }
 
 function attachListeners() {
-    document.querySelectorAll('#cash_in_hand, .payment-amount, .expenditure-amount, .expenditure-type').forEach(input => {
+    document.querySelectorAll('.payment-amount, .expenditure-amount, .expenditure-type').forEach(input => {
         input.removeEventListener('input', updateCalculations);
         input.removeEventListener('change', updateCalculations);
         input.addEventListener('input', updateCalculations);
         input.addEventListener('change', updateCalculations);
     });
+    document.querySelectorAll('.expenditure-type').forEach(select => {
+        select.removeEventListener('change', onExpenditureTypeChange);
+        select.addEventListener('change', onExpenditureTypeChange);
+    });
+    document.querySelectorAll('.payment-method').forEach(select => {
+        select.removeEventListener('change', onPaymentMethodChange);
+        select.addEventListener('change', onPaymentMethodChange);
+    });
+}
+
+function onExpenditureTypeChange(e) {
+    const row = e.target.closest('.expenditure-row');
+    if (row) toggleDamagePhoto(row);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     attachListeners();
+    document.querySelectorAll('#paymentsContainer .payment-row-modern').forEach(updatePaymentRowHints);
+    document.querySelectorAll('.expenditure-row').forEach(toggleDamagePhoto);
     updateCalculations();
 });
 </script>

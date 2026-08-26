@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace App\Http\Livewire;
 
@@ -6,7 +6,7 @@ use Livewire\Component;
 use App\Models\Bar;
 use App\Models\Item;
 use App\Models\BarItemPrice;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\StockEntryItem;
 use App\Models\Expense;
 use App\Models\Payment;
@@ -54,7 +54,7 @@ class DirectorStockEntryForm extends Component
         $items = Item::orderBy('category')->orderBy('name')->get();
         
         // Check if there's existing stock entry for today
-        $existingStockEntry = DailyStockEntry::where('date', $this->date)
+        $existingStockEntry = Sale::where('date', $this->date)
             ->where('bar_id', $this->bar->id)
             ->with(['stockEntryItems'])
             ->first();
@@ -219,7 +219,7 @@ class DirectorStockEntryForm extends Component
             $user = Auth::user();
 
             // Check if stock entry already exists for today
-            $stockEntry = DailyStockEntry::where('date', $this->date)
+            $stockEntry = Sale::where('date', $this->date)
                 ->where('bar_id', $this->bar->id)
                 ->first();
 
@@ -229,7 +229,7 @@ class DirectorStockEntryForm extends Component
                 $stockEntry->save();
             } else {
                 // Create new daily stock entry
-                $stockEntry = DailyStockEntry::create([
+                $stockEntry = Sale::create([
                     'bar_id' => $this->bar->id,
                     'user_id' => $user->id,
                     'date' => $this->date,
@@ -341,7 +341,7 @@ class DirectorStockEntryForm extends Component
         $items = Item::orderBy('category')->orderBy('name')->get();
         
         // Check if there's existing stock entry for today
-        $existingStockEntry = DailyStockEntry::where('date', $this->date)
+        $existingStockEntry = Sale::where('date', $this->date)
             ->where('bar_id', $this->bar->id)
             ->with(['stockEntryItems'])
             ->first();
@@ -399,3 +399,4 @@ class DirectorStockEntryForm extends Component
         return view('livewire.director-stock-entry-form');
     }
 }
+

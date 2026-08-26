@@ -3,18 +3,20 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\StockEntryItem;
 use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\Bar;
 use App\Models\Item;
 use App\Models\CustomerTab;
+use App\Models\DamagedGood;
 use App\Models\Debt;
 use App\Models\DailyReport;
 use App\Models\DailyReportPayment;
 use App\Models\User;
 use App\Models\BottleCount;
+use App\Support\CsvExport;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -47,6 +49,7 @@ class ReportsController extends Controller
             'expenseBreakdown' => $this->getExpenseBreakdown($startDate, $endDate, $barId),
             'paymentBreakdown' => $this->getPaymentBreakdown($startDate, $endDate, $barId),
             'debtTracking' => $this->getDebtTracking($startDate, $endDate, $barId),
+            'managementOverhead' => (float) Expense::overheadBetween($startDate, $endDate, $barId ? (int) $barId : null)->sum('amount'),
             'filter' => $filter,
             'startDate' => $startDate,
             'endDate' => $endDate,
@@ -55,6 +58,109 @@ class ReportsController extends Controller
         ];
 
         return view('reports.dashboard', $data);
+    }
+
+    public function export(Request $request)
+    {
+        $user = Auth::user();
+        if ($user->isSeller()) {
+            abort(403, 'Unauthorized access');
+        }
+
+        $filter = $request->get('filter', 'today');
+        $startDate = $request->get('start_date');
+        $endDate = $request->get('end_date');
+        $barId = $request->get('bar_id');
+
+        [$startDate, $endDate] = $this->getDateRange($filter, $startDate, $endDate);
+
+        $summary = $this->getSummaryData($startDate, $endDate, $barId);
+        $barBreakdown = $this->getBarBreakdown($startDate, $endDate, $barId);
+        $itemInsights = $this->getItemInsights($startDate, $endDate, $barId);
+        $expenseBreakdown = $this->getExpenseBreakdown($startDate, $endDate, $barId);
+        $managementOverhead = (float) Expense::overheadBetween($startDate, $endDate, $barId ? (int) $barId : null)->sum('amount');
+
+        $rows = [];
+        $rows[] = ['Pixies Performance Report'];
+        $rows[] = ['Period', $startDate->format('Y-m-d') . ' to ' . $endDate->format('Y-m-d')];
+        $rows[] = ['Bar Filter', $barId ? (Bar::find($barId)?->name ?? $barId) : 'All Bars'];
+        $rows[] = [];
+        $rows[] = ['Summary Metric', 'Amount (MWK)'];
+        $rows[] = ['Total Sales', $summary['totalSales']];
+        $rows[] = ['Total Collected', $summary['totalCollected']];
+        $rows[] = ['Cash Collected', $summary['cashPayments']];
+        $rows[] = ['Mobile Collected', $summary['mobilePayments']];
+        $rows[] = ['Credit Sales (Outstanding)', $summary['creditSales']];
+        $rows[] = ['Bar Shift Expenses', $summary['totalExpenses']];
+        $rows[] = ['Management Overhead (informational)', $managementOverhead];
+        $rows[] = ['Expected Collected', $summary['expectedCollected']];
+        $rows[] = ['Variance', $summary['missingMoney']];
+        $rows[] = ['Bankable Balance', $summary['bankableBalance']];
+        $rows[] = ['Reconciliation Accurate', $summary['isAccurate'] ? 'Yes' : 'No'];
+        $rows[] = [];
+        $rows[] = ['Bar', 'Sales', 'Shift Expenses', 'Electronic', 'Cash (derived)', 'Net'];
+        foreach ($barBreakdown as $barData) {
+            $rows[] = [
+                $barData['bar']->name,
+                $barData['sales'],
+                $barData['expenses'],
+                $barData['electronic'],
+                $barData['cash'],
+                $barData['profit'],
+            ];
+        }
+        $rows[] = [];
+        $rows[] = ['Top Items', 'Category', 'Units Sold', 'Revenue'];
+        foreach ($itemInsights as $item) {
+            $rows[] = [$item->name, $item->category, $item->total_sold, $item->total_revenue];
+        }
+        $rows[] = [];
+        $rows[] = ['Expense Type', 'Count', 'Total'];
+        foreach ($expenseBreakdown as $expense) {
+            $rows[] = [Expense::typeLabel($expense->type), $expense->count, $expense->total_amount];
+        }
+
+        $filename = 'performance_' . $startDate->format('Y-m-d') . '_to_' . $endDate->format('Y-m-d') . '.csv';
+
+        return CsvExport::download($rows, $filename);
+    }
+
+    public function reportingExport()
+    {
+        $user = Auth::user();
+        if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Unauthorized access to reporting');
+        }
+
+        $query = DailyReport::with(['user', 'bar', 'payments'])->orderBy('date', 'desc');
+        if ($user->isSeller()) {
+            $query->where('user_id', $user->id);
+        }
+        $reports = $query->get();
+
+        $rows = [];
+        $rows[] = ['Date', 'Bar', 'User', 'Cash In Hand', 'Total Sales', 'Mobile Payments', 'Total Payments', 'Notes'];
+        foreach ($reports as $report) {
+            $stockEntry = Sale::where('date', $report->date)
+                ->where('bar_id', $report->bar_id)
+                ->orderByDesc('updated_at')
+                ->first();
+            $sales = $stockEntry ? $stockEntry->stockEntryItems->sum('sales_amount') : 0;
+            $mobile = $report->payments->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO', 'MO626'])->sum('amount');
+
+            $rows[] = [
+                $report->date->format('Y-m-d'),
+                $report->bar->name ?? '',
+                $report->user->name ?? '',
+                $report->cash_in_hand,
+                $sales,
+                $mobile,
+                $report->total_payments,
+                $report->notes,
+            ];
+        }
+
+        return CsvExport::download($rows, 'shift_reports_' . now()->format('Y-m-d') . '.csv');
     }
 
     private function getDateRange($filter, $startDate, $endDate)
@@ -132,28 +238,8 @@ class ReportsController extends Controller
         }
         $creditSales = $creditSalesQuery->sum('balance');
 
-            // EXPENSES: Prefer expenses linked to stock entries within the date range.
-            // Also include expenses recorded by users assigned to the bar for the same date range
-            // to handle cases where expenses were created without a stock_entry_id.
-            $totalExpenses = Expense::where(function ($q) use ($startDate, $endDate, $barId) {
-                // Expenses explicitly linked to stock entries in the date range
-                $q->whereHas('stockEntry', function ($sq) use ($startDate, $endDate, $barId) {
-                    $sq->whereBetween('date', [$startDate, $endDate]);
-                    if ($barId) {
-                        $sq->where('bar_id', $barId);
-                    }
-                });
-
-                // OR expenses recorded on the same date range by users belonging to the bar
-                $q->orWhere(function ($uq) use ($startDate, $endDate, $barId) {
-                    $uq->whereBetween('date', [$startDate, $endDate]);
-                    if ($barId) {
-                        $uq->whereHas('user', function ($userQ) use ($barId) {
-                            $userQ->where('bar_id', $barId);
-                        });
-                    }
-                });
-            })->sum('amount');
+            // EXPENSES: Bar shift expenses only (exclude management overhead).
+            $totalExpenses = (float) Expense::barOperatingBetween($startDate, $endDate, $barId ? (int) $barId : null)->sum('amount');
 
         // Business rule: bankable is visible collected money after expenses.
         $debtCollections = DailyReportPayment::whereHas('dailyReport', function ($query) use ($startDate, $endDate) {
@@ -194,7 +280,7 @@ class ReportsController extends Controller
 
     private function getBarBreakdown($startDate, $endDate, $barId = null)
     {
-        $barsQuery = Bar::with(['dailyStockEntries' => function ($query) use ($startDate, $endDate) {
+        $barsQuery = Bar::with(['sales' => function ($query) use ($startDate, $endDate) {
             $query->whereBetween('date', [$startDate, $endDate]);
         }]);
         
@@ -211,17 +297,7 @@ class ReportsController extends Controller
                 $query->where('bar_id', $bar->id)->whereBetween('date', [$startDate, $endDate]);
             })->sum('sales_amount');
 
-            $expenses = Expense::where(function($q) use ($bar, $startDate, $endDate) {
-                    $q->whereHas('stockEntry', function ($sq) use ($bar, $startDate, $endDate) {
-                        $sq->where('bar_id', $bar->id)->whereBetween('date', [$startDate, $endDate]);
-                    })
-                    ->orWhere(function($uq) use ($bar, $startDate, $endDate) {
-                        $uq->whereBetween('date', [$startDate, $endDate])
-                           ->whereHas('user', function($userQ) use ($bar) {
-                               $userQ->where('bar_id', $bar->id);
-                           });
-                    });
-                })->sum('amount');
+            $expenses = (float) Expense::barOperatingBetween($startDate, $endDate, $bar->id)->sum('amount');
 
             $electronic = Payment::whereHas('stockEntry', function ($query) use ($bar, $startDate, $endDate) {
                 $query->where('bar_id', $bar->id)->whereBetween('date', [$startDate, $endDate]);
@@ -253,12 +329,12 @@ class ReportsController extends Controller
                 \DB::raw('SUM(stock_entry_items.sales_amount) as total_revenue')
             ])
             ->join('items', 'stock_entry_items.item_id', '=', 'items.id')
-            ->join('daily_stock_entries', 'stock_entry_items.stock_entry_id', '=', 'daily_stock_entries.id')
-            ->whereBetween('daily_stock_entries.date', [$startDate, $endDate])
+            ->join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+            ->whereBetween('sales.date', [$startDate, $endDate])
             ->where('stock_entry_items.sold_quantity', '>', 0);
             
         if ($barId) {
-            $query->where('daily_stock_entries.bar_id', $barId);
+            $query->where('sales.bar_id', $barId);
         }
         
         return $query->groupBy('items.id', 'items.name', 'items.category')
@@ -268,20 +344,12 @@ class ReportsController extends Controller
 
     private function getExpenseBreakdown($startDate, $endDate, $barId = null)
     {
-        $query = Expense::select([
+        $query = Expense::barOperatingBetween($startDate, $endDate, $barId ? (int) $barId : null)
+            ->select([
                 'type',
                 \DB::raw('SUM(amount) as total_amount'),
-                \DB::raw('COUNT(*) as count')
-            ])
-            ->whereHas('stockEntry', function ($stockQuery) use ($startDate, $endDate) {
-                $stockQuery->whereBetween('date', [$startDate, $endDate]);
-            });
-            
-        if ($barId) {
-            $query->whereHas('stockEntry', function ($stockQuery) use ($barId) {
-                $stockQuery->where('bar_id', $barId);
-            });
-        }
+                \DB::raw('COUNT(*) as count'),
+            ]);
         
         return $query->groupBy('type')
             ->orderBy('total_amount', 'desc')
@@ -351,11 +419,11 @@ class ReportsController extends Controller
                 \DB::raw('COUNT(*) as debt_count')
             ])
             ->join('users', 'debts.seller_id', '=', 'users.id')
-            ->join('daily_stock_entries', 'debts.stock_entry_id', '=', 'daily_stock_entries.id')
-            ->whereBetween('daily_stock_entries.date', [$startDate, $endDate]);
+            ->join('sales', 'debts.stock_entry_id', '=', 'sales.id')
+            ->whereBetween('sales.date', [$startDate, $endDate]);
             
         if ($barId) {
-            $debtsBySellerQuery->where('daily_stock_entries.bar_id', $barId);
+            $debtsBySellerQuery->where('sales.bar_id', $barId);
         }
         
         $debtsBySeller = $debtsBySellerQuery->groupBy('users.id', 'users.name')
@@ -428,7 +496,7 @@ class ReportsController extends Controller
         // Calculate real-time sales for each report
         foreach ($reports as $report) {
             // Get the most recent stock entry for this report's date and bar
-            $stockEntry = DailyStockEntry::where('date', $report->date)
+            $stockEntry = Sale::where('date', $report->date)
                 ->where('bar_id', $report->bar_id)
                 ->orderBy('updated_at', 'desc')
                 ->first();
@@ -470,7 +538,7 @@ class ReportsController extends Controller
 
         if ($user->bar_id) {
             // Try to get the most recent stock entry for today
-            $stockEntry = DailyStockEntry::where('date', $today)
+            $stockEntry = Sale::where('date', $today)
                 ->where('bar_id', $user->bar_id)
                 ->orderBy('updated_at', 'desc') // Get the most recently updated entry
                 ->first();
@@ -481,7 +549,7 @@ class ReportsController extends Controller
             
             // Fallback: If no stock entry found, try to get any stock entry for today
             if ($totalSales == 0) {
-                $allStockEntries = DailyStockEntry::where('date', $today)
+                $allStockEntries = Sale::where('date', $today)
                     ->where('bar_id', $user->bar_id)
                     ->get();
                     
@@ -522,10 +590,13 @@ class ReportsController extends Controller
             ->sum('balance');
 
         $paymentMethods = DailyReportPayment::getPaymentMethods();
-        $expenditureTypes = Expense::expenditureTypes();
-        $shiftExpenditures = $this->getShiftExpenditures($user, $today, $stockEntry);
+        $expenditureTypes = Expense::balanceExpenditureTypes();
+        $shiftExpenditures = $this->filterBalanceExpenditures(
+            $this->getShiftExpenditures($user, $today, $stockEntry)
+        );
         $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
         $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
+        $balancePayments = $existingReport ? $this->balancePaymentsForForm($existingReport) : [];
 
         return view('reporting.create', compact(
             'existingReport',
@@ -537,7 +608,8 @@ class ReportsController extends Controller
             'expenses',
             'paymentMethods',
             'expenditureTypes',
-            'shiftExpenditures'
+            'shiftExpenditures',
+            'balancePayments'
         ));
     }
 
@@ -553,16 +625,20 @@ class ReportsController extends Controller
             abort(403, 'Unauthorized access to reporting');
         }
 
+        $request->merge([
+            'payments' => $this->normalizeBalancePayments($request->input('payments', [])),
+        ]);
+
         $validated = $request->validate([
-            'cash_in_hand' => 'required|numeric|min:0',
             'payments' => 'required|array|min:1',
             'payments.*.payment_method' => 'required|in:' . DailyReportPayment::paymentMethodKeys(),
             'payments.*.amount' => 'required|numeric|min:0',
-            'payments.*.description' => 'nullable|string|max:255',
+            'payments.*.description' => 'nullable|string|max:500',
             'expenditures' => 'nullable|array',
-            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::expenditureTypes())),
+            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::balanceExpenditureTypes())),
             'expenditures.*.amount' => 'nullable|numeric|min:0',
             'expenditures.*.notes' => 'nullable|string|max:500',
+            'expenditures.*.photo' => 'nullable|image|max:5120',
             'notes' => 'nullable|string|max:1000',
         ]);
 
@@ -570,13 +646,12 @@ class ReportsController extends Controller
             DB::beginTransaction();
 
             $today = now()->format('Y-m-d');
-            $stockEntry = DailyStockEntry::where('date', $today)
+            $stockEntry = Sale::where('date', $today)
                 ->where('bar_id', $user->bar_id)
                 ->orderBy('updated_at', 'desc')
                 ->first();
 
-            // Calculate total payments
-            $totalPayments = collect($validated['payments'])->sum('amount');
+            ['cashInHand' => $cashInHand, 'totalPayments' => $totalPayments] = $this->resolveCashFromPayments($validated['payments']);
 
             // Create or update daily report
             $dailyReport = DailyReport::updateOrCreate(
@@ -586,7 +661,7 @@ class ReportsController extends Controller
                     'date' => $today,
                 ],
                 [
-                    'cash_in_hand' => $validated['cash_in_hand'],
+                    'cash_in_hand' => $cashInHand,
                     'total_sales' => $request->input('total_sales', 0),
                     'total_payments' => $totalPayments,
                     'notes' => $validated['notes'] ?? null,
@@ -668,21 +743,24 @@ class ReportsController extends Controller
         
         // SOURCE OF TRUTH: Total Sales ONLY from stock entries
         // This already includes cash, mobile, and credit sales
-        $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+        $stockEntry = Sale::where('date', $dailyReport->date)
             ->where('bar_id', $dailyReport->bar_id)
             ->orderBy('updated_at', 'desc')
             ->first();
             
         $totalSales = $stockEntry ? $stockEntry->stockEntryItems->sum('sales_amount') : 0;
         
-        // COLLECTION: Collected Money ONLY from payments table
-        // Cash is stored in daily_reports.cash_in_hand
-        $cashPayments = $dailyReport->cash_in_hand;
+        // COLLECTION: Collected money from pay-through rows (Cash lives in payments now)
+        $cashPayments = (float) $dailyReport->payments()->where('payment_method', 'Cash')->sum('amount');
+        if ($cashPayments <= 0) {
+            $cashPayments = (float) $dailyReport->cash_in_hand;
+        }
         $mobilePayments = $dailyReport->payments()->whereIn('payment_method', ['Airtel Money', 'Mpamba', 'MO626', 'MO', 'POS'])->sum('amount');
         $debtCollections = $dailyReport->payments()->where('payment_method', 'Debt Collection')->sum('amount');
         
-        // "Collected" includes cash + mobile + debt collections.
-        $totalCollected = $cashPayments + $mobilePayments + $debtCollections;
+        $totalCollected = $dailyReport->payments()->where('payment_method', 'Cash')->exists()
+            ? (float) $dailyReport->payments()->sum('amount')
+            : $cashPayments + $mobilePayments + $debtCollections;
         
         $totalPayments = $totalCollected; 
         
@@ -692,7 +770,7 @@ class ReportsController extends Controller
             ->where('status', '!=', 'paid')
             ->sum('balance');
         
-        // EXPENSES (operational only — debt is tracked as credit sales)
+        // EXPENSES (operational only â€” debt is tracked as credit sales)
         $totalExpenses = $expenses->sum('amount');
 
         $reconciliation = $this->shiftCollectionMath(
@@ -710,17 +788,21 @@ class ReportsController extends Controller
         $isAccurate = abs($validationCheck - $totalSales) < 0.01;
         
         // Calculate payments by method for the table
-        $allRegisteredPayments = $dailyReport->cash_in_hand + $dailyReport->payments()->sum('amount');
+        $allRegisteredPayments = $totalCollected;
         $paymentsByMethod = $dailyReport->payments()
-            ->selectRaw('payment_method, SUM(amount) as total_amount')
-            ->groupBy('payment_method')
             ->get()
-            ->mapWithKeys(function ($payment) use ($allRegisteredPayments) {
+            ->groupBy('payment_method')
+            ->reject(fn ($group, $method) => $method === 'Cash')
+            ->mapWithKeys(function ($group, $method) use ($allRegisteredPayments) {
+                $amount = (float) $group->sum('amount');
+                $breakdown = $group->pluck('description')->filter()->implode(' | ');
+
                 return [
-                    $payment->payment_method => [
-                        'amount' => $payment->total_amount,
-                        'percentage' => $allRegisteredPayments > 0 ? ($payment->total_amount / $allRegisteredPayments) * 100 : 0
-                    ]
+                    $method => [
+                        'amount' => $amount,
+                        'percentage' => $allRegisteredPayments > 0 ? ($amount / $allRegisteredPayments) * 100 : 0,
+                        'breakdown' => $breakdown,
+                    ],
                 ];
             });
 
@@ -772,8 +854,8 @@ class ReportsController extends Controller
         }
 
         // Sellers can only edit their own reports and only today's report
-        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
-            abort(403, 'You can only edit your own today\'s report');
+        if ($user->isSeller() && !$dailyReport->isEditableBy($user)) {
+            abort(403, 'You can only edit your own report within 48 hours of submitting it');
         }
 
         $dailyReport->load('payments');
@@ -793,7 +875,7 @@ class ReportsController extends Controller
         }
 
         // SOURCE OF TRUTH: Total Sales ONLY from stock entries
-        $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+        $stockEntry = Sale::where('date', $dailyReport->date)
             ->where('bar_id', $dailyReport->bar_id)
             ->orderBy('updated_at', 'desc')
             ->first();
@@ -828,14 +910,17 @@ class ReportsController extends Controller
         $missingMoney = $reconciliation['missingMoney'];
         
         $paymentMethods = DailyReportPayment::getPaymentMethods();
-        $expenditureTypes = Expense::expenditureTypes();
-        $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+        $expenditureTypes = Expense::balanceExpenditureTypes();
+        $stockEntry = Sale::where('date', $dailyReport->date)
             ->where('bar_id', $dailyReport->bar_id)
             ->orderBy('updated_at', 'desc')
             ->first();
-        $shiftExpenditures = $this->getShiftExpenditures($user, $dailyReport->date->format('Y-m-d'), $stockEntry);
+        $shiftExpenditures = $this->filterBalanceExpenditures(
+            $this->getShiftExpenditures($user, $dailyReport->date->format('Y-m-d'), $stockEntry)
+        );
         $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
         $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
+        $balancePayments = $this->balancePaymentsForForm($dailyReport);
 
         return view('reporting.edit', compact(
             'dailyReport', 
@@ -851,7 +936,8 @@ class ReportsController extends Controller
             'missingMoney',
             'bankableBalance',
             'expenditureTypes',
-            'shiftExpenditures'
+            'shiftExpenditures',
+            'balancePayments'
         ));
     }
 
@@ -868,37 +954,39 @@ class ReportsController extends Controller
         }
 
         // Sellers can only update their own reports and only today's report
-        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
-            abort(403, 'You can only update your own today\'s report');
+        if ($user->isSeller() && !$dailyReport->isEditableBy($user)) {
+            abort(403, 'You can only update your own report within 48 hours of submitting it');
         }
 
+        $request->merge([
+            'payments' => $this->normalizeBalancePayments($request->input('payments', [])),
+        ]);
+
         $validated = $request->validate([
-            'cash_in_hand' => 'required|numeric|min:0',
             'payments' => 'required|array|min:1',
             'payments.*.payment_method' => 'required|in:' . DailyReportPayment::paymentMethodKeys(),
             'payments.*.amount' => 'required|numeric|min:0',
-            'payments.*.description' => 'nullable|string|max:255',
+            'payments.*.description' => 'nullable|string|max:500',
             'expenditures' => 'nullable|array',
-            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::expenditureTypes())),
+            'expenditures.*.type' => 'nullable|in:' . implode(',', array_keys(Expense::balanceExpenditureTypes())),
             'expenditures.*.amount' => 'nullable|numeric|min:0',
             'expenditures.*.notes' => 'nullable|string|max:500',
+            'expenditures.*.photo' => 'nullable|image|max:5120',
             'notes' => 'nullable|string|max:1000',
         ]);
 
         try {
             DB::beginTransaction();
 
-            $stockEntry = DailyStockEntry::where('date', $dailyReport->date)
+            $stockEntry = Sale::where('date', $dailyReport->date)
                 ->where('bar_id', $dailyReport->bar_id)
                 ->orderBy('updated_at', 'desc')
                 ->first();
 
-            // Calculate total payments
-            $totalPayments = collect($validated['payments'])->sum('amount');
+            ['cashInHand' => $cashInHand, 'totalPayments' => $totalPayments] = $this->resolveCashFromPayments($validated['payments']);
 
-            // Update daily report
             $dailyReport->update([
-                'cash_in_hand' => $validated['cash_in_hand'],
+                'cash_in_hand' => $cashInHand,
                 'total_payments' => $totalPayments,
                 'notes' => $validated['notes'] ?? null,
             ]);
@@ -946,8 +1034,8 @@ class ReportsController extends Controller
         }
 
         // Sellers can only delete their own reports and only today's report
-        if ($user->isSeller() && ($dailyReport->user_id !== $user->id || $dailyReport->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
-            abort(403, 'You can only delete your own today\'s report');
+        if ($user->isSeller() && !$dailyReport->isEditableBy($user)) {
+            abort(403, 'You can only delete your own report within 48 hours of submitting it');
         }
 
         try {
@@ -970,7 +1058,7 @@ class ReportsController extends Controller
         }
     }
 
-    private function getShiftExpenditures(User $user, string $date, ?DailyStockEntry $stockEntry): array
+    private function getShiftExpenditures(User $user, string $date, ?Sale $stockEntry): array
     {
         $items = [];
 
@@ -1013,13 +1101,86 @@ class ReportsController extends Controller
         return $items;
     }
 
-    private function syncShiftExpenditures(Request $request, User $user, ?DailyStockEntry $stockEntry, ?string $date = null): void
+    private function normalizeBalancePayments(array $payments): array
+    {
+        return collect($payments)->map(function ($payment) {
+            $method = (string) ($payment['payment_method'] ?? '');
+            $parsed = DailyReportPayment::parseAmountInput($method, (string) ($payment['amount'] ?? ''));
+
+            return [
+                'payment_method' => $method,
+                'amount' => $parsed['amount'],
+                'description' => $parsed['description'],
+            ];
+        })->all();
+    }
+
+    private function filterBalanceExpenditures(array $items): array
+    {
+        $allowed = array_keys(Expense::balanceExpenditureTypes());
+
+        return collect($items)
+            ->filter(fn ($row) => in_array($row['type'] ?? '', $allowed, true))
+            ->values()
+            ->all();
+    }
+
+    private function balancePaymentsForForm(DailyReport $report): array
+    {
+        $report->loadMissing('payments');
+
+        $items = $report->payments->map(fn ($payment) => [
+            'payment_method' => $payment->payment_method,
+            'amount' => $payment->amount,
+            'amount_display' => DailyReportPayment::amountDisplayForForm(
+                $payment->payment_method,
+                $payment->amount,
+                $payment->description
+            ),
+            'description' => $payment->description,
+        ])->values()->all();
+
+        $hasCash = collect($items)->contains(fn ($row) => ($row['payment_method'] ?? '') === 'Cash');
+        if (!$hasCash && (float) $report->cash_in_hand > 0) {
+            array_unshift($items, [
+                'payment_method' => 'Cash',
+                'amount' => $report->cash_in_hand,
+                'amount_display' => (string) $report->cash_in_hand,
+                'description' => null,
+            ]);
+        }
+
+        return $items;
+    }
+
+    private function resolveCashFromPayments(array $payments): array
+    {
+        $collection = collect($payments);
+
+        return [
+            'cashInHand' => (float) $collection->where('payment_method', 'Cash')->sum('amount'),
+            'totalPayments' => (float) $collection->sum('amount'),
+        ];
+    }
+
+    private function syncShiftExpenditures(Request $request, User $user, ?Sale $stockEntry, ?string $date = null): void
     {
         $date = $date ?? now()->format('Y-m-d');
         $barId = $user->bar_id;
         $expenditures = $request->input('expenditures', []);
 
         Expense::where('user_id', $user->id)->where('date', $date)->delete();
+
+        $balanceDamageQuery = DamagedGood::where('user_id', $user->id)
+            ->whereDate('date', $date)
+            ->where('from_balance', true);
+        if ($barId) {
+            $balanceDamageQuery->where('bar_id', $barId);
+        }
+        $balanceDamageQuery->get()->each(function (DamagedGood $item) {
+            DamagedGoodController::deleteDamagePhoto($item->photo_path);
+            $item->delete();
+        });
 
         if ($barId) {
             CustomerTab::where('bar_id', $barId)
@@ -1029,7 +1190,7 @@ class ReportsController extends Controller
                 ->delete();
         }
 
-        foreach ($expenditures as $row) {
+        foreach ($expenditures as $index => $row) {
             $amount = (float) ($row['amount'] ?? 0);
             if ($amount <= 0) {
                 continue;
@@ -1047,7 +1208,6 @@ class ReportsController extends Controller
                     'date' => $date,
                     'amount' => $amount,
                     'paid_amount' => 0,
-                    'balance' => $amount,
                     'status' => 'open',
                     'description' => Expense::SHIFT_DEBT_PREFIX . ' ' . $notes,
                     'created_by' => $user->id,
@@ -1061,6 +1221,20 @@ class ReportsController extends Controller
                     'date' => $date,
                     'user_id' => $user->id,
                 ]);
+
+                if ($type === 'damages' && $barId) {
+                    DamagedGood::create([
+                        'date' => $date,
+                        'description' => $notes ?: 'Damaged goods',
+                        'amount' => $amount,
+                        'photo_path' => DamagedGoodController::storeDamagePhoto(
+                            $request->file("expenditures.{$index}.photo")
+                        ),
+                        'from_balance' => true,
+                        'bar_id' => $barId,
+                        'user_id' => $user->id,
+                    ]);
+                }
             }
         }
     }
@@ -1075,13 +1249,19 @@ class ReportsController extends Controller
         float $operationalExpenses,
         float $debtCollections = 0
     ): array {
-        $expectedCollected = ($totalSales - $creditSales - $operationalExpenses) + $debtCollections;
+        // Expected collected is the money that should have been received from
+        // customers (sales minus credit), plus any debt repayments recorded as
+        // collections. Expenses are NOT subtracted here because $totalCollected is
+        // the raw pre-expense receipts; they are only removed in the bankable figure.
+        $expectedCollected = ($totalSales - $creditSales) + $debtCollections;
         $missingMoney = $totalCollected - $expectedCollected;
 
         return [
             'expectedCollected' => $expectedCollected,
             'missingMoney' => $missingMoney,
+            'expectedBankable' => $totalSales - $creditSales - $operationalExpenses,
             'bankableBalance' => $totalCollected - $operationalExpenses,
         ];
     }
 }
+

@@ -10,6 +10,7 @@ class Payment extends Model
 
     public function stockEntry()
     {
-        return $this->belongsTo(DailyStockEntry::class);
+        return $this->belongsTo(Sale::class);
     }
 }
+

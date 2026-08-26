@@ -78,10 +78,9 @@
                         <form action="{{ route('credit-customers.store') }}" method="POST">
                             @csrf
                             <div class="row g-4">
-                                @if(auth()->user()->isDirector())
+                                @if(auth()->user()->isAdmin())
                                     <div class="col-12">
                                         <label class="form-label fw-bold text-dark">Target Bar</label>
-                                        <input type="hidden" name="is_director" value="1">
                                         <select name="bar_id" class="form-select form-control-modern" required>
                                             <option value="">Select Bar...</option>
                                             @foreach($bars as $b)

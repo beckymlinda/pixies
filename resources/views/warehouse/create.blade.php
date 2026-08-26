@@ -95,7 +95,7 @@
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div>
                 <h1 class="h3 fw-bold mb-1">Add Warehouse Item</h1>
-                <p class="text-muted small mb-0">Four simple steps — costs and prices are calculated for you.</p>
+                <p class="text-muted small mb-0">Three simple steps — costs and prices are calculated for you.</p>
             </div>
             <a href="{{ route('warehouse.index') }}" class="btn btn-outline-secondary rounded-pill px-4">
                 <i class="bi bi-arrow-left me-1"></i>Back
@@ -178,8 +178,14 @@
                             <div class="col-md-4">
                                 <label class="form-label" id="conversion_label">Bottles per purchase unit *</label>
                                 <input type="number" name="conversion_factor" id="conversion_factor" class="form-control"
-                                       value="{{ old('conversion_factor', 24) }}" required min="1" step="1">
-                                <div class="helper-text" id="conversion_hint">How many bottles in 1 crate?</div>
+                                       value="{{ old('conversion_factor', 1) }}" required min="1" step="1">
+                                <div class="helper-text" id="conversion_hint">How many bottles in 1 purchase unit?</div>
+                            </div>
+                            <div class="col-md-4 d-none" id="shots_per_bottle_row">
+                                <label class="form-label">Shots per Bottle *</label>
+                                <input type="number" name="shots_per_bottle" id="shots_per_bottle" class="form-control"
+                                       value="{{ old('shots_per_bottle', 25) }}" min="1" step="1">
+                                <div class="helper-text">For selling full bottles (e.g. 25)</div>
                             </div>
                             <div class="col-md-4">
                                 <label class="form-label">Total Stock (auto)</label>
@@ -197,46 +203,108 @@
                     {{-- STEP 3: Branch prices --}}
                     <div class="step-card">
                         <div class="step-title"><span class="step-number">3</span>What price at each branch?</div>
-                        <p class="small text-muted mb-3">Set the selling price per {{ old('base_unit', 'bottle') }} for each location. Sellers will see these prices in stock entry.</p>
-                        <div class="table-responsive">
-                            <table class="table table-sm branch-table mb-0">
-                                <thead>
-                                    <tr>
-                                        <th>Branch</th>
-                                        <th style="width:180px">Selling Price (MWK)</th>
-                                        <th>Profit per Unit</th>
-                                        <th style="width:90px">Status</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    @foreach($bars as $bar)
-                                    <tr>
-                                        <td class="fw-semibold">{{ $bar->name }}</td>
-                                        <td>
-                                            <input type="number" name="bar_selling_prices[{{ $bar->id }}]"
-                                                   class="form-control form-control-sm bar-selling-price"
-                                                   data-bar-id="{{ $bar->id }}" placeholder="0" min="0" step="0.01">
-                                        </td>
-                                        <td>
-                                            <span class="fw-semibold" id="profit-{{ $bar->id }}">—</span>
-                                            <span class="small text-muted" id="profit-percent-{{ $bar->id }}"></span>
-                                        </td>
-                                        <td><span class="badge bg-light text-dark" id="profit-badge-{{ $bar->id }}">—</span></td>
-                                    </tr>
-                                    @endforeach
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+                        <p class="small text-muted mb-3">Sellers choose <strong>Shot</strong> or <strong>Bottle</strong> when recording sales. Stock is deducted in base units automatically.</p>
 
-                    {{-- STEP 4: Additional units (after branch pricing) --}}
-                    <div class="step-card">
-                        <div class="step-title"><span class="step-number">4</span>Other ways to sell? <span class="fw-normal text-muted">(optional)</span></div>
-                        <p class="small text-muted mb-2">e.g. 6-pack, 4-pack — these appear in seller stock entry with their own prices.</p>
-                        <div id="additionalUnitsContainer"></div>
-                        <button type="button" id="addUnitBtn" class="btn btn-sm btn-outline-primary">
-                            <i class="bi bi-plus-lg me-1"></i>Add Selling Unit
-                        </button>
+                        {{-- Bottle-only pricing (base unit = Bottle) --}}
+                        <div id="bottle-only-pricing">
+                            <p class="small fw-semibold mb-2">Bottle price per branch</p>
+                            <div class="table-responsive">
+                                <table class="table table-sm branch-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Branch</th>
+                                            <th style="width:180px">Bottle Price (MWK)</th>
+                                            <th>Profit per Bottle</th>
+                                            <th style="width:90px">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach($bars as $bar)
+                                        <tr class="bar-price-row" data-bar-id="{{ $bar->id }}">
+                                            <td class="fw-semibold">{{ $bar->name }}</td>
+                                            <td>
+                                                <input type="number" name="bar_selling_prices[{{ $bar->id }}]"
+                                                       class="form-control form-control-sm bar-selling-price"
+                                                       data-bar-id="{{ $bar->id }}" data-unit-type="bottle" placeholder="0" min="0" step="0.01">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold bottle-profit" id="profit-{{ $bar->id }}">—</span>
+                                                <span class="small text-muted" id="profit-percent-{{ $bar->id }}"></span>
+                                            </td>
+                                            <td><span class="badge bg-light text-dark" id="profit-badge-{{ $bar->id }}">—</span></td>
+                                        </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {{-- Shot + Bottle pricing (base unit = Shot) --}}
+                        <div id="shot-based-pricing" class="d-none">
+                            <p class="small text-warning mb-3"><i class="bi bi-info-circle me-1"></i>Bar B sells shots; Liquor Shop sells bottles. Set both prices below.</p>
+
+                            <p class="small fw-semibold mb-2">Shot price (Bar B)</p>
+                            <div class="table-responsive mb-4">
+                                <table class="table table-sm branch-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Branch</th>
+                                            <th style="width:180px">Shot Price (MWK)</th>
+                                            <th>Profit per Shot</th>
+                                            <th style="width:90px">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach($bars as $bar)
+                                        <tr class="bar-price-row shot-price-row" data-bar-id="{{ $bar->id }}" data-supports-shot="{{ $bar->supportsWarehouseBaseUnit('Shot') ? '1' : '0' }}">
+                                            <td class="fw-semibold">{{ $bar->name }}</td>
+                                            <td>
+                                                <input type="number" name="bar_selling_prices[{{ $bar->id }}]"
+                                                       class="form-control form-control-sm bar-selling-price"
+                                                       data-bar-id="{{ $bar->id }}" data-unit-type="shot" placeholder="0" min="0" step="0.01">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold" id="shot-profit-{{ $bar->id }}">—</span>
+                                                <span class="small text-muted" id="shot-profit-percent-{{ $bar->id }}"></span>
+                                            </td>
+                                            <td><span class="badge bg-light text-dark" id="shot-profit-badge-{{ $bar->id }}">—</span></td>
+                                        </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p class="small fw-semibold mb-2">Bottle price per branch</p>
+                            <div class="table-responsive">
+                                <table class="table table-sm branch-table mb-0">
+                                    <thead>
+                                        <tr>
+                                            <th>Branch</th>
+                                            <th style="width:180px">Bottle Price (MWK)</th>
+                                            <th>Profit per Bottle</th>
+                                            <th style="width:90px">Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach($bars as $bar)
+                                        <tr class="bottle-price-row" data-bar-id="{{ $bar->id }}">
+                                            <td class="fw-semibold">{{ $bar->name }}</td>
+                                            <td>
+                                                <input type="number" name="bottle_bar_selling_prices[{{ $bar->id }}]"
+                                                       class="form-control form-control-sm bottle-bar-selling-price"
+                                                       data-bar-id="{{ $bar->id }}" placeholder="0" min="0" step="0.01">
+                                            </td>
+                                            <td>
+                                                <span class="fw-semibold" id="bottle-profit-{{ $bar->id }}">—</span>
+                                                <span class="small text-muted" id="bottle-profit-percent-{{ $bar->id }}"></span>
+                                            </td>
+                                            <td><span class="badge bg-light text-dark" id="bottle-profit-badge-{{ $bar->id }}">—</span></td>
+                                        </tr>
+                                        @endforeach
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="d-flex gap-2 justify-content-end mt-3">
@@ -251,15 +319,28 @@
     </div>
 </div>
 
+@php
+    $barsForJs = $bars->map(fn ($b) => [
+        'id' => $b->id,
+        'name' => $b->name,
+        'supportsShot' => $b->supportsWarehouseBaseUnit('Shot'),
+    ])->values();
+@endphp
+
 <script>
-const BARS = @json($bars->map(function ($b) { return ['id' => $b->id, 'name' => $b->name]; })->values());
-const UNIT_PRESETS = {
-    '6 Pack': 6,
-    '4 Pack': 4,
-    '12 Pack': 12,
-    'Half Crate': 12,
-    'Custom': 0
+const BARS = @json($barsForJs);
+const PURCHASE_UNIT_DEFAULTS = {
+    Crate: 24,
+    Carton: 24,
+    Case: 24,
+    Box: 12,
+    Pack: 6,
+    Keg: 1,
+    Bottle: 1,
+    Shot: 1,
+    Other: 1
 };
+const UNIT_PRESETS = {};
 
 const purchaseUnitInput = document.getElementById('purchase_unit');
 const quantityPurchasedInput = document.getElementById('quantity_purchased');
@@ -267,18 +348,123 @@ const totalPurchaseCostInput = document.getElementById('total_purchase_cost');
 const conversionFactorInput = document.getElementById('conversion_factor');
 const quantityInput = document.getElementById('quantity');
 const baseUnitInput = document.getElementById('base_unit');
+const shotsPerBottleInput = document.getElementById('shots_per_bottle');
+const shotsPerBottleRow = document.getElementById('shots_per_bottle_row');
 const conversionLabel = document.getElementById('conversion_label');
 const conversionHint = document.getElementById('conversion_hint');
+const bottleOnlyPricing = document.getElementById('bottle-only-pricing');
+const shotBasedPricing = document.getElementById('shot-based-pricing');
+let conversionManuallyEdited = false;
+
+function syncConversionFactor(forcePreset = false) {
+    const purchase = purchaseUnitInput.value;
+    const base = baseUnitInput.value;
+    if (purchase && base && purchase === base) {
+        conversionFactorInput.value = 1;
+        conversionFactorInput.readOnly = true;
+        conversionFactorInput.classList.add('bg-light');
+        return;
+    }
+    conversionFactorInput.readOnly = false;
+    conversionFactorInput.classList.remove('bg-light');
+    if (forcePreset || (!conversionManuallyEdited && PURCHASE_UNIT_DEFAULTS[purchase])) {
+        if (base === 'Shot' && purchase === 'Bottle') {
+            conversionFactorInput.value = 25;
+        } else {
+            conversionFactorInput.value = PURCHASE_UNIT_DEFAULTS[purchase];
+        }
+    }
+}
+
+function updateUnitsFields() {
+    const baseUnit = baseUnitInput.value;
+    const purchase = purchaseUnitInput.value;
+    const isShotBase = baseUnit === 'Shot';
+    const buyingBottles = purchase === 'Bottle';
+
+    if (shotsPerBottleRow) {
+        shotsPerBottleRow.classList.toggle('d-none', !isShotBase || buyingBottles);
+    }
+    if (shotsPerBottleInput) {
+        shotsPerBottleInput.required = isShotBase && !buyingBottles;
+        if (isShotBase && buyingBottles) {
+            shotsPerBottleInput.removeAttribute('name');
+        } else if (isShotBase) {
+            shotsPerBottleInput.setAttribute('name', 'shots_per_bottle');
+        }
+    }
+
+    updateConversionLabels();
+}
+
+function updatePricingSections() {
+    const baseUnit = baseUnitInput.value;
+    const isShotBase = baseUnit === 'Shot';
+
+    bottleOnlyPricing.classList.toggle('d-none', isShotBase);
+    shotBasedPricing.classList.toggle('d-none', !isShotBase);
+
+    bottleOnlyPricing.querySelectorAll('input, select, textarea').forEach(el => {
+        el.disabled = isShotBase;
+    });
+    shotBasedPricing.querySelectorAll('input, select, textarea').forEach(el => {
+        el.disabled = !isShotBase;
+    });
+
+    document.querySelectorAll('.shot-price-row').forEach(row => {
+        const supportsShot = row.dataset.supportsShot === '1';
+        row.style.display = isShotBase && !supportsShot ? 'none' : '';
+        if (isShotBase && !supportsShot) {
+            const input = row.querySelector('.bar-selling-price');
+            if (input) input.value = '';
+        }
+    });
+
+    calculateAll();
+}
+
+function updateProfitDisplay(prefix, barId, sellingPrice, unitCost) {
+    const profitEl = document.getElementById(prefix + 'profit-' + barId);
+    const percentEl = document.getElementById(prefix + 'profit-percent-' + barId);
+    const badge = document.getElementById(prefix + 'profit-badge-' + barId);
+    if (!profitEl || !badge) return;
+
+    const profit = sellingPrice - unitCost;
+    const profitPercent = unitCost > 0 ? (profit / unitCost) * 100 : 0;
+
+    if (sellingPrice > 0) {
+        profitEl.textContent = 'MWK ' + profit.toFixed(0);
+        if (percentEl) percentEl.textContent = ' (' + profitPercent.toFixed(0) + '% markup)';
+        profitEl.className = 'fw-semibold ' + (profitPercent >= 10 ? 'profit-positive' : profitPercent >= 0 ? 'profit-low' : 'profit-negative');
+        if (profitPercent < 0) { badge.className = 'badge bg-danger'; badge.textContent = 'Loss'; }
+        else if (profitPercent < 10) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Low'; }
+        else { badge.className = 'badge bg-success'; badge.textContent = 'Good'; }
+    } else {
+        profitEl.textContent = '—';
+        if (percentEl) percentEl.textContent = '';
+        badge.className = 'badge bg-light text-dark';
+        badge.textContent = '—';
+    }
+}
 
 function getBaseUnitLabel() {
     return baseUnitInput.value || 'Unit';
 }
 
 function updateConversionLabels() {
-    const base = getBaseUnitLabel().toLowerCase() + 's';
+    const base = getBaseUnitLabel();
+    const baseLower = base.toLowerCase() + 's';
     const purchase = purchaseUnitInput.value || 'purchase unit';
-    conversionLabel.textContent = base.charAt(0).toUpperCase() + base.slice(1) + ' per ' + purchase + ' *';
-    conversionHint.textContent = 'How many ' + base + ' in 1 ' + purchase + '?';
+    const isShotBase = base === 'Shot';
+    const buyingBottles = purchase === 'Bottle';
+
+    if (isShotBase && buyingBottles) {
+        conversionLabel.textContent = 'Shots per Bottle *';
+        conversionHint.textContent = 'How many shots in 1 bottle?';
+    } else {
+        conversionLabel.textContent = baseLower.charAt(0).toUpperCase() + baseLower.slice(1) + ' per ' + purchase + ' *';
+        conversionHint.textContent = 'How many ' + baseLower + ' in 1 ' + purchase + '?';
+    }
 }
 
 function calculateAll() {
@@ -293,28 +479,28 @@ function calculateAll() {
     document.getElementById('costPerBaseUnit').textContent = 'MWK ' + costPerBaseUnit.toFixed(0);
     document.getElementById('costPerPurchaseUnit').textContent = 'MWK ' + costPerPurchaseUnit.toFixed(0);
 
+    const shotsPerBottle = (baseUnitInput.value === 'Shot' && purchaseUnitInput.value === 'Bottle')
+        ? (parseFloat(conversionFactorInput.value) || 1)
+        : (parseFloat(shotsPerBottleInput?.value) || 25);
+    const costPerBottle = costPerBaseUnit * shotsPerBottle;
+
     document.querySelectorAll('.bar-selling-price').forEach(input => {
         const barId = input.dataset.barId;
         const sellingPrice = parseFloat(input.value) || 0;
-        const profit = sellingPrice - costPerBaseUnit;
-        const profitPercent = costPerBaseUnit > 0 ? (profit / costPerBaseUnit) * 100 : 0;
-        const profitEl = document.getElementById('profit-' + barId);
-        const percentEl = document.getElementById('profit-percent-' + barId);
-        const badge = document.getElementById('profit-badge-' + barId);
+        const prefix = input.dataset.unitType === 'shot' ? 'shot-' : '';
+        updateProfitDisplay(prefix, barId, sellingPrice, costPerBaseUnit);
+    });
 
-        if (sellingPrice > 0) {
-            profitEl.textContent = 'MWK ' + profit.toFixed(0);
-            percentEl.textContent = ' (' + profitPercent.toFixed(0) + '% markup)';
-            profitEl.className = 'fw-semibold ' + (profitPercent >= 10 ? 'profit-positive' : profitPercent >= 0 ? 'profit-low' : 'profit-negative');
-            if (profitPercent < 0) { badge.className = 'badge bg-danger'; badge.textContent = 'Loss'; }
-            else if (profitPercent < 10) { badge.className = 'badge bg-warning text-dark'; badge.textContent = 'Low'; }
-            else { badge.className = 'badge bg-success'; badge.textContent = 'Good'; }
-        } else {
-            profitEl.textContent = '—';
-            percentEl.textContent = '';
-            badge.className = 'badge bg-light text-dark';
-            badge.textContent = '—';
-        }
+    document.querySelectorAll('.bottle-bar-selling-price').forEach(input => {
+        const barId = input.dataset.barId;
+        const sellingPrice = parseFloat(input.value) || 0;
+        updateProfitDisplay('bottle-', barId, sellingPrice, costPerBottle);
+    });
+
+    document.querySelectorAll('#bottle-only-pricing .bar-selling-price').forEach(input => {
+        const barId = input.dataset.barId;
+        const sellingPrice = parseFloat(input.value) || 0;
+        updateProfitDisplay('', barId, sellingPrice, costPerBaseUnit);
     });
 }
 
@@ -323,100 +509,38 @@ function autoCalculateQuantity() {
     quantityInput.value = qty;
 }
 
-[purchaseUnitInput, quantityPurchasedInput, totalPurchaseCostInput, conversionFactorInput, baseUnitInput].forEach(el => {
-    el.addEventListener('input', () => { updateConversionLabels(); calculateAll(); autoCalculateQuantity(); });
-    el.addEventListener('change', () => { updateConversionLabels(); calculateAll(); autoCalculateQuantity(); });
+[purchaseUnitInput, quantityPurchasedInput, totalPurchaseCostInput, baseUnitInput].forEach(el => {
+    el.addEventListener('input', () => { updateUnitsFields(); updatePricingSections(); calculateAll(); autoCalculateQuantity(); });
+    el.addEventListener('change', () => {
+        if (el === purchaseUnitInput || el === baseUnitInput) {
+            syncConversionFactor(el === purchaseUnitInput);
+        }
+        updateUnitsFields();
+        updatePricingSections();
+        calculateAll();
+        autoCalculateQuantity();
+    });
 });
-document.querySelectorAll('.bar-selling-price').forEach(el => el.addEventListener('input', calculateAll));
+if (shotsPerBottleInput) {
+    shotsPerBottleInput.addEventListener('input', calculateAll);
+}
+conversionFactorInput.addEventListener('input', () => {
+    if (!conversionFactorInput.readOnly) {
+        conversionManuallyEdited = true;
+    }
+    calculateAll();
+    autoCalculateQuantity();
+});
+conversionFactorInput.addEventListener('change', () => {
+    calculateAll();
+    autoCalculateQuantity();
+});
+document.querySelectorAll('.bar-selling-price, .bottle-bar-selling-price').forEach(el => el.addEventListener('input', calculateAll));
 
-updateConversionLabels();
+syncConversionFactor(true);
+updateUnitsFields();
+updatePricingSections();
 calculateAll();
 autoCalculateQuantity();
-
-// Additional units — expanded immediately, preset dropdown
-const additionalUnitsContainer = document.getElementById('additionalUnitsContainer');
-let additionalUnitIndex = 0;
-
-function createUnitRow(index) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'unit-block';
-    wrapper.dataset.index = index;
-
-    const presetOptions = Object.keys(UNIT_PRESETS).map(k =>
-        `<option value="${k}">${k}</option>`
-    ).join('');
-
-    wrapper.innerHTML = `
-        <div class="d-flex justify-content-between align-items-center mb-3">
-            <strong class="text-dark">Selling Unit #${index + 1}</strong>
-            <button type="button" class="btn btn-sm btn-outline-danger remove-unit-btn">Remove</button>
-        </div>
-        <div class="row g-3">
-            <div class="col-md-4">
-                <label class="form-label">Unit Type *</label>
-                <select class="form-select unit-preset-select" data-index="${index}">
-                    <option value="">Choose a unit...</option>
-                    ${presetOptions}
-                </select>
-            </div>
-            <div class="col-md-4 unit-name-col">
-                <label class="form-label">Unit Name *</label>
-                <input type="text" name="additional_units[${index}][unit_name]" class="form-control unit-name-input" data-index="${index}" placeholder="e.g. 6 Pack" required>
-            </div>
-            <div class="col-md-4">
-                <label class="form-label">Contains (base units) *</label>
-                <input type="number" name="additional_units[${index}][conversion_factor]" class="form-control unit-cf-input" data-index="${index}" value="6" min="1" required>
-                <div class="helper-text">How many ${getBaseUnitLabel().toLowerCase()}s in 1 of this unit</div>
-            </div>
-        </div>
-        <div class="mt-3 pt-3 border-top">
-            <label class="form-label mb-2">Selling Price per Branch (MWK)</label>
-            <div class="row g-2">
-                ${BARS.map(bar => `
-                    <div class="col-md-6 col-lg-4">
-                        <div class="input-group input-group-sm">
-                            <span class="input-group-text" style="min-width:110px;font-size:0.75rem">${bar.name}</span>
-                            <input type="number" name="additional_units[${index}][bar_selling_prices][${bar.id}]"
-                                   class="form-control" placeholder="Price" min="0" step="0.01">
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-            <div class="helper-text mt-1">Leave blank to use base unit price × conversion factor</div>
-        </div>
-    `;
-
-    const presetSelect = wrapper.querySelector('.unit-preset-select');
-    const nameInput = wrapper.querySelector('.unit-name-input');
-    const cfInput = wrapper.querySelector('.unit-cf-input');
-    const nameCol = wrapper.querySelector('.unit-name-col');
-
-    presetSelect.addEventListener('change', () => {
-        const preset = presetSelect.value;
-        if (!preset) return;
-        if (preset === 'Custom') {
-            nameInput.value = '';
-            nameInput.readOnly = false;
-            nameCol.style.display = '';
-            cfInput.value = 1;
-        } else {
-            nameInput.value = preset;
-            nameInput.readOnly = true;
-            cfInput.value = UNIT_PRESETS[preset];
-        }
-    });
-
-    wrapper.querySelector('.remove-unit-btn').addEventListener('click', () => wrapper.remove());
-    return wrapper;
-}
-
-document.getElementById('addUnitBtn').addEventListener('click', () => {
-    const row = createUnitRow(additionalUnitIndex++);
-    additionalUnitsContainer.appendChild(row);
-    const preset = row.querySelector('.unit-preset-select');
-    preset.value = '6 Pack';
-    preset.dispatchEvent(new Event('change'));
-    preset.focus();
-});
 </script>
 @endsection

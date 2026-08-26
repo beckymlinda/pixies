@@ -182,7 +182,7 @@
                             You can still approve available quantities (partial approval),
                             or add stock first before approving the full request.
                         </p>
-                        <a href="{{ route('director-stock-entries.create') }}" class="btn btn-sm btn-warning rounded-pill fw-bold px-3">
+                        <a href="{{ route('stock.index') }}" class="btn btn-sm btn-warning rounded-pill fw-bold px-3">
                             <i class="bi bi-box-seam me-1"></i> Go to Stock Management to Add Stock
                         </a>
                     </div>

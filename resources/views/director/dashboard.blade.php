@@ -110,7 +110,7 @@
                                 <div class="col-12">
                                     <div class="payment-pill shadow-sm bg-white text-center">
                                         <div class="h5 fw-semibold text-dark mb-1">No counts recorded yet</div>
-                                        <div class="text-muted small">Castel bottle counts will appear here once today's stock entries are saved.</div>
+                                        <div class="text-muted small">Castel bottle counts will appear here once today's sales are saved.</div>
                                     </div>
                                 </div>
                             @endforelse

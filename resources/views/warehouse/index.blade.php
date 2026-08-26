@@ -110,6 +110,8 @@
     }
     .action-btn:hover { background: #f8fafc; color: #1e293b; }
     .action-btn.primary { background: #1e293b; color: white; border-color: #1e293b; }
+    .action-btn.danger { color: #dc2626; border-color: #fecaca; }
+    .action-btn.danger:hover { background: #fef2f2; color: #b91c1c; }
     .branch-context {
         background: #eff6ff;
         border: 1px solid #bfdbfe;
@@ -221,21 +223,29 @@
                 <p class="text-muted mb-0">No items found.</p>
             </div>
         @else
+        @php $stockItems = $stocks->items(); @endphp
         <div class="mobile-cards">
-        @foreach($stocks as $stock)
+        @foreach($stockItems as $stock)
             @php
                 $baseUnit = $stock->units->firstWhere('is_base_unit', true);
                 $unitCost = $stock->getUnitCost();
+                $branchPrices = $stock->getBranchSellingPricesForDisplay();
                 if ($selectedBarId) {
                     $sellPrice = $stock->getSellingPriceForBranch((int) $selectedBarId);
                     $profitPct = $stock->getProfitPercentageForBranch((int) $selectedBarId);
-                    $priceLabel = 'MWK ' . number_format($sellPrice ?? 0, 0);
+                    $unitLabel = $selectedBar ? strtolower($stock->getSellingUnitLabelForBranch($selectedBar)) : 'unit';
+                    $priceLabel = 'MWK ' . number_format($sellPrice ?? 0, 0) . '/' . $unitLabel;
                 } else {
-                    $range = $stock->getSellingPriceRange();
-                    $priceLabel = $range['has_range']
-                        ? 'MWK ' . number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
-                        : 'MWK ' . number_format($range['min'], 0);
-                    $profitPct = $unitCost > 0 ? (($range['min'] - $unitCost) / $unitCost) * 100 : 0;
+                    $priceLabel = collect($branchPrices)->map(function ($bp) {
+                        return $bp['bar_name'] . ': MWK ' . number_format($bp['price'], 0) . '/' . strtolower($bp['unit']);
+                    })->implode("\n");
+                    if ($priceLabel === '') {
+                        $range = $stock->getSellingPriceRange();
+                        $priceLabel = $range['has_range']
+                            ? 'MWK ' . number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
+                            : 'MWK ' . number_format($range['min'], 0);
+                    }
+                    $profitPct = null;
                     $sellPrice = null;
                 }
                 $rowClass = $stock->isLowStock() ? 'low-stock' : ($stock->isExpiringsoon() ? 'expiring' : '');
@@ -244,15 +254,15 @@
                     <div class="d-flex justify-content-between align-items-start mb-2">
                         <div>
                             <div class="item-name">{{ $stock->item_name }}</div>
-                            <div class="meta">{{ $baseUnit?->unit_name ?? 'units' }} · bought as {{ $stock->purchase_unit ?? '—' }}</div>
+                            <div class="meta">Bottles · bought as {{ $stock->purchase_unit ?? '—' }}</div>
                         </div>
                         <span class="status-badge {{ $stock->status_badge_class }}">{{ $stock->item_status }}</span>
                     </div>
                     <div class="row g-2">
                         <div class="col-4">
                             <div class="metric-pill">
-                                <div class="lbl">Stock</div>
-                                <div class="val {{ $stock->isLowStock() ? 'loss' : '' }}">{{ number_format($stock->quantity) }}</div>
+                                <div class="lbl">Bottles</div>
+                                <div class="val {{ $stock->isLowStock() ? 'loss' : '' }}">{{ number_format($stock->getStockInBottles()) }}</div>
                             </div>
                         </div>
                         <div class="col-4">
@@ -263,8 +273,8 @@
                         </div>
                         <div class="col-4">
                             <div class="metric-pill">
-                                <div class="lbl">{{ $selectedBar ? 'Sell' : 'Price' }}</div>
-                                <div class="val price" style="font-size:0.78rem">{{ $priceLabel }}</div>
+                                <div class="lbl">{{ $selectedBar ? 'Sell' : 'Prices' }}</div>
+                                <div class="val price" style="font-size:0.72rem; white-space:pre-line; line-height:1.3">{{ $selectedBarId ? $priceLabel : e($priceLabel) }}</div>
                             </div>
                         </div>
                     </div>
@@ -277,6 +287,11 @@
                         <a href="{{ route('warehouse.show', $stock) }}" class="action-btn primary"><i class="bi bi-eye"></i> View</a>
                         <a href="{{ route('warehouse.edit', $stock) }}" class="action-btn"><i class="bi bi-pencil"></i> Edit</a>
                         <a href="{{ route('warehouse.restock', $stock) }}" class="action-btn"><i class="bi bi-plus-circle"></i> Restock</a>
+                        <form action="{{ route('warehouse.destroy', $stock) }}" method="POST" class="d-inline flex-fill" style="flex:1;min-width:70px" onsubmit="return confirm('Delete {{ addslashes($stock->item_name) }} from warehouse? This cannot be undone.');">
+                            @csrf
+                            @method('DELETE')
+                            <button type="submit" class="action-btn danger w-100"><i class="bi bi-trash"></i> Delete</button>
+                        </form>
                     </div>
                 </div>
         @endforeach
@@ -290,8 +305,7 @@
                         <thead>
                             <tr>
                                 <th>Item</th>
-                                <th>Stock</th>
-                                <th>Unit</th>
+                                <th>Bottles Left</th>
                                 <th class="text-end">Cost</th>
                                 <th class="text-end">{{ $selectedBar ? 'Sell (' . $selectedBar->name . ')' : 'Sell Price' }}</th>
                                 <th class="text-end">Markup</th>
@@ -300,19 +314,26 @@
                             </tr>
                         </thead>
                         <tbody>
-                            @forelse($stocks as $stock)
+                            @forelse($stockItems as $stock)
                                 @php
                                     $baseUnit = $stock->units->firstWhere('is_base_unit', true);
                                     $unitCost = $stock->getUnitCost();
+                                    $branchPrices = $stock->getBranchSellingPricesForDisplay();
                                     if ($selectedBarId) {
                                         $sellPrice = $stock->getSellingPriceForBranch((int) $selectedBarId);
                                         $profitPct = $stock->getProfitPercentageForBranch((int) $selectedBarId);
-                                        $priceLabel = number_format($sellPrice ?? 0, 0);
+                                        $unitLabel = $selectedBar ? strtolower($stock->getSellingUnitLabelForBranch($selectedBar)) : 'unit';
+                                        $priceLabel = number_format($sellPrice ?? 0, 0) . '/' . $unitLabel;
                                     } else {
-                                        $range = $stock->getSellingPriceRange();
-                                        $priceLabel = $range['has_range']
-                                            ? number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
-                                            : number_format($range['min'], 0);
+                                        $priceLabel = collect($branchPrices)->map(function ($bp) {
+                                            return $bp['bar_name'] . ': ' . number_format($bp['price'], 0) . '/' . strtolower($bp['unit']);
+                                        })->implode('<br>');
+                                        if ($priceLabel === '') {
+                                            $range = $stock->getSellingPriceRange();
+                                            $priceLabel = $range['has_range']
+                                                ? number_format($range['min'], 0) . ' – ' . number_format($range['max'], 0)
+                                                : number_format($range['min'], 0);
+                                        }
                                         $profitPct = null;
                                     }
                                     $rowClass = $stock->isLowStock() ? 'low-stock' : ($stock->isExpiringsoon() ? 'expiring' : '');
@@ -322,22 +343,37 @@
                                         <div class="fw-bold">{{ $stock->item_name }}</div>
                                         <div class="small text-muted">Bought as {{ $stock->purchase_unit ?? '—' }}</div>
                                     </td>
-                                    <td class="fw-semibold {{ $stock->isLowStock() ? 'text-danger' : '' }}">{{ number_format($stock->quantity) }}</td>
-                                    <td>{{ $baseUnit?->unit_name ?? '—' }}</td>
+                                    <td class="fw-semibold {{ $stock->isLowStock() ? 'text-danger' : '' }}">{{ number_format($stock->getStockInBottles()) }}</td>
                                     <td class="text-end">MWK {{ number_format($unitCost, 0) }}</td>
-                                    <td class="text-end fw-semibold text-primary">MWK {{ $priceLabel }}</td>
+                                    <td class="text-end fw-semibold text-primary small">
+                                        @if($selectedBarId)
+                                            MWK {{ $priceLabel }}
+                                        @else
+                                            @foreach($branchPrices as $bp)
+                                                <div>{{ $bp['bar_name'] }}: MWK {{ number_format($bp['price'], 0) }}/{{ strtolower($bp['unit']) }}</div>
+                                            @endforeach
+                                            @if(count($branchPrices) === 0)
+                                                MWK {!! $priceLabel !!}
+                                            @endif
+                                        @endif
+                                    </td>
                                     <td class="text-end {{ $profitPct !== null ? ($profitPct >= 0 ? 'text-success' : 'text-danger') : 'text-muted' }}">
                                         {{ $profitPct !== null ? number_format($profitPct, 0) . '%' : '—' }}
                                     </td>
                                     <td><span class="status-badge {{ $stock->status_badge_class }}">{{ $stock->item_status }}</span></td>
                                     <td class="text-end text-nowrap">
-                                        <a href="{{ route('warehouse.show', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-eye"></i></a>
-                                        <a href="{{ route('warehouse.edit', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2"><i class="bi bi-pencil"></i></a>
-                                        <a href="{{ route('warehouse.restock', $stock) }}" class="btn btn-sm btn-outline-primary py-0 px-2"><i class="bi bi-plus-circle"></i></a>
+                                        <a href="{{ route('warehouse.show', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2" title="View"><i class="bi bi-eye"></i></a>
+                                        <a href="{{ route('warehouse.edit', $stock) }}" class="btn btn-sm btn-outline-secondary py-0 px-2" title="Edit"><i class="bi bi-pencil"></i></a>
+                                        <a href="{{ route('warehouse.restock', $stock) }}" class="btn btn-sm btn-outline-primary py-0 px-2" title="Restock"><i class="bi bi-plus-circle"></i></a>
+                                        <form action="{{ route('warehouse.destroy', $stock) }}" method="POST" class="d-inline" onsubmit="return confirm('Delete {{ addslashes($stock->item_name) }} from warehouse? This cannot be undone.');">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit" class="btn btn-sm btn-outline-danger py-0 px-2" title="Delete"><i class="bi bi-trash"></i></button>
+                                        </form>
                                     </td>
                                 </tr>
                             @empty
-                                <tr><td colspan="8" class="text-center py-5 text-muted">No items found.</td></tr>
+                                <tr><td colspan="7" class="text-center py-5 text-muted">No items found.</td></tr>
                             @endforelse
                         </tbody>
                     </table>
@@ -351,7 +387,9 @@
                 <div class="small text-muted">
                     {{ $stocks->firstItem() }}–{{ $stocks->lastItem() }} of {{ $stocks->total() }}
                 </div>
-                {{ $stocks->appends(['search' => $search ?? null, 'bar_id' => $selectedBarId])->links() }}
+                <div>
+                    {{ $stocks->withQueryString()->links() }}
+                </div>
             </div>
         @endif
     </div>

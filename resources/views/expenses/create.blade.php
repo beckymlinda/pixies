@@ -82,8 +82,8 @@
     <!-- Clean Header -->
     <div class="expense-header d-flex align-items-center justify-content-between shadow-sm">
         <div>
-            <h1 class="h3 fw-bold mb-1 text-dark">Record Expense</h1>
-            <p class="text-muted small mb-0">Track your daily bar operational costs and petty cash.</p>
+            <h1 class="h3 fw-bold mb-1 text-dark">Record Management Expense</h1>
+            <p class="text-muted small mb-0">Track manager/director operating costs separately from bar shift sales.</p>
         </div>
         <a href="{{ route('expenses.index') }}" class="btn btn-outline-secondary rounded-pill px-4 btn-sm bg-white border shadow-sm">
             <i class="bi bi-arrow-left me-2"></i>Back to List
@@ -123,6 +123,21 @@
                             @csrf
                             
                             <div class="row g-4 mb-4">
+                                @if(auth()->user()->isAdmin() && isset($bars) && $bars->count())
+                                    <div class="col-12">
+                                        <label class="input-label">Related Bar (for reporting)</label>
+                                        <div class="input-icon-group">
+                                            <i class="bi bi-building"></i>
+                                            <select name="bar_id" class="custom-select" required>
+                                                <option value="">Select bar...</option>
+                                                @foreach($bars as $b)
+                                                    <option value="{{ $b->id }}" {{ old('bar_id') == $b->id ? 'selected' : '' }}>{{ $b->name }}</option>
+                                                @endforeach
+                                            </select>
+                                        </div>
+                                        <small class="text-muted">This expense is tracked in Profit &amp; Loss as management overhead and does not reduce daily bar sales.</small>
+                                    </div>
+                                @endif
                                 <div class="col-md-6">
                                     <label class="input-label">Expense Category</label>
                                     <div class="input-icon-group">
@@ -169,7 +184,7 @@
                 <div class="mt-4 text-center">
                     <p class="text-muted small">
                         <i class="bi bi-shield-lock me-1"></i>
-                        All expenses are logged and verified against the daily cash count.
+                        Management expenses are shown separately in Profit &amp; Loss and do not affect seller till reconciliation.
                     </p>
                 </div>
             </div>

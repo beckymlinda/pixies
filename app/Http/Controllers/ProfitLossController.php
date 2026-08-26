@@ -6,7 +6,7 @@ use App\Models\Bar;
 use App\Models\CustomerTab;
 use App\Models\DailyReport;
 use App\Models\DailyReportPayment;
-use App\Models\DailyStockEntry;
+use App\Models\Sale;
 use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\ProductUnit;
@@ -131,7 +131,7 @@ class ProfitLossController extends Controller
             $startDate = Carbon::now()->startOfYear();
             $endDate = Carbon::now();
         } elseif ($range === 'all') {
-            $earliestDate = DailyStockEntry::when($selectedBar, fn($query) => $query->where('bar_id', $selectedBar->id))->min('date');
+            $earliestDate = Sale::when($selectedBar, fn($query) => $query->where('bar_id', $selectedBar->id))->min('date');
             $startDate = $earliestDate ? Carbon::parse($earliestDate) : Carbon::now()->startOfYear();
             $endDate = Carbon::now();
         } else {
@@ -152,22 +152,18 @@ class ProfitLossController extends Controller
                 $purchaseCost = $this->calculatePurchaseCost($this->stockItemsQuery($currentDate, $bar)->get());
 
                 $expenses = Expense::where('user_id', $user->id)
+                    ->barOperating()
                     ->whereDate('date', $currentDate)
                     ->sum('amount');
 
+                $overheadExpenses = 0;
                 $locationName = $bar->name;
             } else {
                 $salesAmount = $this->stockItemsQuery($currentDate, null, $selectedBar)->sum('sales_amount');
                 $purchaseCost = $this->calculatePurchaseCost($this->stockItemsQuery($currentDate, null, $selectedBar)->get());
 
-                $expensesQuery = Expense::whereDate('date', $currentDate);
-                if ($selectedBar) {
-                    $expensesQuery->where(function($query) use ($selectedBar) {
-                        $query->whereHas('stockEntry', fn($q) => $q->where('bar_id', $selectedBar->id))
-                            ->orWhereHas('user', fn($q) => $q->where('bar_id', $selectedBar->id));
-                    });
-                }
-                $expenses = $expensesQuery->sum('amount');
+                $expenses = (float) Expense::barOperatingBetween($currentDate, $currentDate, $selectedBar?->id)->sum('amount');
+                $overheadExpenses = (float) Expense::overheadBetween($currentDate, $currentDate, $selectedBar?->id)->sum('amount');
 
                 $locationName = $selectedBar ? $selectedBar->name : 'All Locations';
             }
@@ -183,6 +179,7 @@ class ProfitLossController extends Controller
                 'gross_profit' => $grossProfit,
                 'gross_margin' => $this->marginPercent($grossProfit, $salesAmount),
                 'expenses' => $expenses,
+                'overhead_expenses' => $overheadExpenses,
                 'net_profit' => $netProfit,
                 'profit_margin' => $this->marginPercent($netProfit, $salesAmount),
             ];
@@ -196,6 +193,7 @@ class ProfitLossController extends Controller
             'purchase_cost' => array_sum(array_column($reportData, 'purchase_cost')),
             'gross_profit' => array_sum(array_column($reportData, 'gross_profit')),
             'expenses' => array_sum(array_column($reportData, 'expenses')),
+            'overhead_expenses' => array_sum(array_column($reportData, 'overhead_expenses')),
             'net_profit' => array_sum(array_column($reportData, 'net_profit')),
         ];
 
@@ -257,10 +255,8 @@ class ProfitLossController extends Controller
                 $barSales = $this->stockItemsRangeQuery($startDate, $endDate, $bar)->sum('sales_amount');
                 $barPurchaseCost = $this->calculatePurchaseCost($this->stockItemsRangeQuery($startDate, $endDate, $bar)->get());
 
-                $barExpenses = Expense::where(function($query) use ($bar) {
-                    $query->whereHas('stockEntry', fn($q) => $q->where('bar_id', $bar->id))
-                        ->orWhereHas('user', fn($q) => $q->where('bar_id', $bar->id));
-                })->whereBetween('date', [$startDate, $endDate])->sum('amount');
+                $barExpenses = (float) Expense::barOperatingBetween($startDate, $endDate, $bar->id)->sum('amount');
+                $barOverhead = (float) Expense::overheadBetween($startDate, $endDate, $bar->id)->sum('amount');
                 
                 if ($barSales > 0) {
                     $barGrossProfit = $barSales - $barPurchaseCost;
@@ -271,6 +267,7 @@ class ProfitLossController extends Controller
                         'purchase_cost' => $barPurchaseCost,
                         'gross_profit' => $barGrossProfit,
                         'expenses' => $barExpenses,
+                        'overhead_expenses' => $barOverhead,
                         'profit' => $barNetProfit,
                         'gross_margin' => $this->marginPercent($barGrossProfit, $barSales),
                         'margin' => $this->marginPercent($barNetProfit, $barSales),
@@ -300,7 +297,7 @@ class ProfitLossController extends Controller
             }
         })->sum('closing_stock');
 
-        $latestEntryDate = DailyStockEntry::when($selectedBar, fn($query) => $query->where('bar_id', $selectedBar->id))->max('date');
+        $latestEntryDate = Sale::when($selectedBar, fn($query) => $query->where('bar_id', $selectedBar->id))->max('date');
         $currentStockValue = (object) ['purchase_value' => 0, 'selling_value' => 0];
         if ($latestEntryDate) {
             $currentStockValue = StockEntryItem::whereHas('stockEntry', function($query) use ($latestEntryDate, $selectedBar) {
@@ -396,3 +393,4 @@ class ProfitLossController extends Controller
         ];
     }
 }
+

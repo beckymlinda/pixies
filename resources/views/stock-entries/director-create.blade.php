@@ -312,6 +312,29 @@
                             @if($req->approved_at) on {{ $req->approved_at->format('M d, Y h:i A') }}@endif
                         </div>
                     @endif
+
+                    @if(auth()->user()->isDirector() || auth()->user()->isManager())
+                        <div class="d-flex gap-2 mt-3 pt-2 border-top flex-wrap">
+                            @if($req->status === 'pending')
+                                <a href="{{ route('warehouse.transfer-requests') }}#approveForm-{{ $req->id }}" class="btn btn-sm btn-success rounded-pill">
+                                    <i class="bi bi-check-lg me-1"></i>Review &amp; Approve
+                                </a>
+                                <form action="{{ route('warehouse.transfer-requests.quick-approve', $req) }}" method="POST" class="d-inline" onsubmit="return confirm('Approve all requested quantities for {{ $req->resolveBarName() }}?');">
+                                    @csrf
+                                    <button type="submit" class="btn btn-sm btn-outline-success rounded-pill">
+                                        <i class="bi bi-toggle-on me-1"></i>Quick Approve
+                                    </button>
+                                </form>
+                            @elseif(in_array($req->status, ['approved', 'partially_approved']))
+                                <form action="{{ route('warehouse.transfer-requests.revert', $req) }}" method="POST" class="d-inline" onsubmit="return confirm('Disapprove this transfer? Stock already sent to {{ $req->resolveBarName() }} will be deducted and returned to warehouse.');">
+                                    @csrf
+                                    <button type="submit" class="btn btn-sm btn-outline-danger rounded-pill">
+                                        <i class="bi bi-toggle-off me-1"></i>Disapprove / Revert
+                                    </button>
+                                </form>
+                            @endif
+                        </div>
+                    @endif
                 </div>
             </div>
         @empty
@@ -347,6 +370,7 @@
                             <option value="{{ $bar->id }}">{{ $bar->name }}</option>
                         @endforeach
                     </select>
+                    <div class="form-text">Shot units are only available when requesting for <strong>{{ \App\Models\Bar::BAR_B }}</strong>. Other bars (including Liquor Shop) receive bottles only.</div>
                 </div>
 
                 {{-- Step 2: Items from warehouse --}}
@@ -446,41 +470,50 @@ function renderWarehouseItems(items) {
     items.forEach(item => {
         const isSelected = selectedItems[item.id] !== undefined;
         const units = item.units || [];
-        // Default to first unit
-        const defaultUnit = units.length > 0 ? units[0] : null;
+        if (units.length === 0) return;
+
+        const outOfStock = item.is_out_of_stock === true;
         const selectedData = selectedItems[item.id] || {};
+        const stockLabel = item.stock_unit || 'units';
 
         html += `
-            <div class="warehouse-item-row ${isSelected ? 'selected' : ''}" id="wh-item-${item.id}" data-name="${item.item_name.toLowerCase()}">
+            <div class="warehouse-item-row ${isSelected ? 'selected' : ''} ${outOfStock ? 'opacity-75' : ''}" id="wh-item-${item.id}" data-name="${item.item_name.toLowerCase()}">
                 <div class="item-check">
                     <input type="checkbox" class="form-check-input" 
                            id="check-${item.id}" 
-                           ${isSelected ? 'checked' : ''} 
+                           ${isSelected && !outOfStock ? 'checked' : ''} 
+                           ${outOfStock ? 'disabled' : ''}
                            onchange="toggleItem(${item.id})">
                 </div>
                 <div class="item-details">
                     <div class="fw-bold text-dark" style="font-size:0.9rem">${item.item_name}</div>
                     <div class="text-muted" style="font-size:0.75rem">
-                        Available: <strong class="${item.available_quantity <= 0 ? 'text-danger' : 'text-success'}">${item.available_quantity.toLocaleString()}</strong> base units
+                        ${outOfStock
+                            ? '<span class="text-danger fw-semibold">Out of stock</span>'
+                            : `Available: <strong class="text-success">${Number(item.available_quantity).toLocaleString()}</strong> ${stockLabel}`
+                        }
                     </div>
                 </div>
                 <div class="item-controls">
                     <select class="form-select form-select-sm" id="unit-${item.id}" 
-                            onchange="updateItemSelection(${item.id})" style="min-width:120px">
+                            onchange="updateItemSelection(${item.id})" style="min-width:120px"
+                            ${outOfStock ? 'disabled' : ''}>
                         ${units.map(u => `
                             <option value="${u.unit_name}" 
                                     data-conversion="${u.conversion_factor}" 
                                     data-price="${u.price}"
+                                    data-max="${u.max_quantity ?? item.available_quantity}"
                                     ${selectedData.unit_name === u.unit_name ? 'selected' : ''}>
                                 ${u.unit_name} ${u.price > 0 ? '(MWK ' + u.price.toLocaleString() + ')' : ''}
                             </option>
                         `).join('')}
                     </select>
                     <input type="number" class="form-control form-control-sm" id="qty-${item.id}" 
-                           min="1" value="${selectedData.quantity || 1}" 
+                           min="1" max="${outOfStock ? 0 : (units[0]?.max_quantity ?? item.available_quantity)}"
+                           value="${selectedData.quantity || 1}" 
                            onchange="updateItemSelection(${item.id})"
                            style="width:80px" placeholder="Qty"
-                           ${!isSelected ? 'disabled' : ''}>
+                           ${!isSelected || outOfStock ? 'disabled' : ''}>
                 </div>
             </div>
         `;
@@ -516,10 +549,26 @@ function updateItemSelection(itemId) {
     const unitSelect = document.getElementById(`unit-${itemId}`);
     const qtyInput = document.getElementById(`qty-${itemId}`);
     const selectedOption = unitSelect.options[unitSelect.selectedIndex];
+    const maxQty = parseInt(selectedOption.dataset.max) || 0;
+    qtyInput.max = maxQty;
+    let qty = parseInt(qtyInput.value) || 1;
+
+    if (qty > maxQty) {
+        qty = maxQty;
+        qtyInput.value = maxQty;
+        if (maxQty <= 0) {
+            alert('This item is out of stock for the selected bar.');
+            checkbox.checked = false;
+            delete selectedItems[itemId];
+            updateSubmitButton();
+            return;
+        }
+        alert('Maximum available: ' + maxQty + ' ' + unitSelect.value);
+    }
 
     selectedItems[itemId] = {
         warehouse_stock_id: itemId,
-        quantity: parseInt(qtyInput.value) || 1,
+        quantity: qty,
         unit_name: unitSelect.value,
         conversion_factor: parseInt(selectedOption.dataset.conversion) || 1,
     };

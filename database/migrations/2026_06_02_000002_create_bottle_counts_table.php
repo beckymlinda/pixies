@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -18,7 +18,7 @@ return new class extends Migration
             $table->date('date')->nullable();
             $table->timestamps();
 
-            $table->foreign('stock_entry_id')->references('id')->on('daily_stock_entries')->onDelete('set null');
+            $table->foreign('stock_entry_id')->references('id')->on('sales')->onDelete('set null');
             $table->foreign('bar_id')->references('id')->on('bars')->onDelete('cascade');
             $table->foreign('item_id')->references('id')->on('items')->onDelete('cascade');
             $table->index(['bar_id', 'item_id']);
@@ -30,3 +30,4 @@ return new class extends Migration
         Schema::dropIfExists('bottle_counts');
     }
 };
+
