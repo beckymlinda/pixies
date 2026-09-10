@@ -154,7 +154,6 @@
                         <thead>
                             <tr>
                                 <th class="ps-4">Item Details</th>
-                                <th class="text-center">Unit</th>
                                 <th class="text-center">Price</th>
                                 <th class="text-center">Opening</th>
                                 <th class="text-center">Orders</th>
@@ -165,28 +164,22 @@
                         </thead>
                         <tbody>
                             @foreach($paginatedItems as $index => $item)
+                                @php
+                                    $baseUnit = ($item['product_units'] ?? collect())->firstWhere('is_base_unit', true)
+                                        ?? ($item['product_units'] ?? collect())->first();
+                                    $baseUnitName = $baseUnit->unit_name ?? 'Bottle';
+                                    $baseUnitPrice = $baseUnit->price?->selling_price ?? $item['price'];
+                                @endphp
                                 <tr>
                                     <td data-label="Item" class="ps-4">
                                         <div class="fw-bold text-dark">{{ $item['name'] }}</div>
                                         <div class="text-muted" style="font-size: 0.7rem;">{{ $item['category'] }}</div>
                                         <input type="hidden" name="items[{{ $index }}][item_id]" value="{{ $item['id'] }}">
-                                        <input type="hidden" name="items[{{ $index }}][price]" value="{{ $item['price'] }}">
-                                    </td>
-                                    <td data-label="Unit" class="text-center">
-                                        <select name="items[{{ $index }}][unit_name]" class="form-control-stock unit-select">
-                                            @if(isset($item['product_units']) && $item['product_units']->count() > 0)
-                                                @foreach($item['product_units'] as $unit)
-                                                    <option value="{{ $unit->unit_name }}" data-price="{{ $unit->price?->selling_price ?? $item['price'] }}" data-conversion="{{ $unit->conversion_factor }}">
-                                                        {{ $unit->unit_name }} @if($unit->is_base_unit)(base)@endif
-                                                    </option>
-                                                @endforeach
-                                            @else
-                                                <option value="unit" data-price="{{ $item['price'] }}" data-conversion="1">Unit</option>
-                                            @endif
-                                        </select>
+                                        <input type="hidden" name="items[{{ $index }}][price]" value="{{ $baseUnitPrice }}">
+                                        <input type="hidden" name="items[{{ $index }}][unit_name]" value="{{ $baseUnitName }}">
                                     </td>
                                     <td data-label="Price" class="text-center text-muted small">
-                                        <span class="price-display">{{ number_format($item['price']) }}</span>
+                                        <span class="price-display">{{ number_format($baseUnitPrice) }}</span>
                                     </td>
                                     <td data-label="Opening" class="text-center">
                                         <input type="hidden" name="items[{{ $index }}][opening_stock]" class="opening-stock" value="{{ $item['opening_stock'] }}">
@@ -290,64 +283,32 @@ function updateRow(row) {
     const prevSalesInBase = parseFloat(row.querySelector('.previous-sales').value) || 0;
     const newSalesInput = row.querySelector('.new-sales');
     const newSales = newSalesInput ? (parseFloat(newSalesInput.value) || 0) : 0;
-    const unitSelect = row.querySelector('.unit-select');
-    const selectedOption = unitSelect.options[unitSelect.selectedIndex];
-    const price = parseFloat(selectedOption.dataset.price) || parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
-    const conversionFactor = parseFloat(selectedOption.dataset.conversion) || 1;
-    
-    const newSalesInBase = newSales * conversionFactor;
-    const totalSalesInBaseUnits = prevSalesInBase + newSalesInBase;
+    const price = parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
+
     const availableStock = opening + orders;
-    
-    if (newSalesInput && !newSalesInput.disabled && newSalesInBase > Math.max(0, availableStock - prevSalesInBase)) {
-        const remainingBase = Math.max(0, availableStock - prevSalesInBase);
-        const maxNewInSelectedUnit = Math.floor(remainingBase / conversionFactor);
-        newSalesInput.value = maxNewInSelectedUnit;
 
-        // Find the base unit name from the select options (conversion_factor = 1)
-        const unitName = selectedOption.text.replace('(base)', '').trim();
-        let baseUnitName = unitName;
-        for (let i = 0; i < unitSelect.options.length; i++) {
-            const opt = unitSelect.options[i];
-            const conv = parseFloat(opt.dataset.conversion) || 1;
-            if (opt.text.includes('(base)') || conv <= 1) {
-                baseUnitName = opt.text.replace('(base)', '').trim();
-                break;
-            }
-        }
-
-        const remainingBaseRounded = Math.floor(remainingBase);
-        const neededBase = Math.ceil(newSalesInBase);
-
-        let message;
-        if (unitName !== baseUnitName) {
-            message = 'Cannot sell ' + newSales + ' ' + unitName + ' — only ' + remainingBaseRounded + ' ' + baseUnitName + '(s) available (need ' + neededBase + ' ' + baseUnitName + '(s) for ' + newSales + ' ' + unitName + '). Max you can sell: ' + maxNewInSelectedUnit + ' ' + unitName + '(s).';
-        } else {
-            message = 'Cannot sell ' + newSales + ' ' + unitName + ' — only ' + remainingBaseRounded + ' ' + baseUnitName + '(s) available.';
-        }
-        alert(message);
+    if (newSalesInput && !newSalesInput.disabled && newSales > Math.max(0, availableStock - prevSalesInBase)) {
+        const remaining = Math.max(0, availableStock - prevSalesInBase);
+        newSalesInput.value = Math.floor(remaining);
+        alert('Cannot sell ' + newSales + ' — only ' + Math.floor(remaining) + ' available.');
     }
-    
+
     const finalNewSales = newSalesInput ? (parseFloat(newSalesInput.value) || 0) : 0;
-    const finalNewSalesInBase = finalNewSales * conversionFactor;
-    const finalTotalSalesInBase = prevSalesInBase + finalNewSalesInBase;
-    
+    const finalTotalSales = prevSalesInBase + finalNewSales;
+
     const salesHidden = row.querySelector('.sales');
     if (salesHidden) {
         salesHidden.value = finalNewSales;
     }
-    
-    const closing = Math.max(0, availableStock - finalTotalSalesInBase);
+
+    const closing = Math.max(0, availableStock - finalTotalSales);
     row.querySelector('.closing-stock').value = Number.isInteger(closing) ? closing : closing.toFixed(1);
-    
+
     const closingDisplay = row.querySelector('.closing-display');
     if (closingDisplay) {
-        const displayClosing = conversionFactor > 1 && selectedOption.value === 'Bottle'
-            ? Math.floor(closing / conversionFactor)
-            : closing;
-        closingDisplay.textContent = Number(displayClosing).toLocaleString();
+        closingDisplay.textContent = Number(closing).toLocaleString();
     }
-    
+
     const baseAmount = parseFloat(row.querySelector('.sales-amount-val')?.dataset.base) || 0;
     const amount = baseAmount + (finalNewSales * price);
     if (row.querySelector('.sales-amount-val')) {
@@ -356,28 +317,8 @@ function updateRow(row) {
     if (row.querySelector('.sales-amount-display')) {
         row.querySelector('.sales-amount-display').innerText = amount.toLocaleString();
     }
-    
+
     updateGrandTotal();
-}
-
-function updatePriceForUnitEdit(selectElement) {
-    const row = selectElement.closest('tr');
-    if (!row) return;
-
-    const selectedOption = selectElement.options[selectElement.selectedIndex];
-    const newPrice = parseFloat(selectedOption.dataset.price) || 0;
-
-    const priceInput = row.querySelector('input[name*="[price]"]');
-    if (priceInput) {
-        priceInput.value = newPrice;
-    }
-
-    const priceDisplay = row.querySelector('.price-display');
-    if (priceDisplay) {
-        priceDisplay.textContent = newPrice.toLocaleString();
-    }
-
-    updateRow(row);
 }
 
 function updateGrandTotal() {
@@ -389,12 +330,6 @@ function updateGrandTotal() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    document.addEventListener('change', (e) => {
-        if (e.target.matches('.unit-select')) {
-            updatePriceForUnitEdit(e.target);
-        }
-    });
-
     document.querySelectorAll('tbody tr').forEach(row => {
         row.querySelectorAll('.new-sales').forEach(input => {
             input.addEventListener('input', () => {

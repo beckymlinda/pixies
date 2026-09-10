@@ -896,7 +896,7 @@ class StockEntryController extends Controller
                 'last_updated' => $stock->stock_date,
                 'product_units' => $productUnits,
             ];
-        })->sortBy([['bar_name', 'asc'], ['item_name', 'asc']])->values();
+        })->sortBy([['bar_id', 'asc'], ['item_id', 'asc']])->values();
 
         if (!empty($search)) {
             $stockRows = $stockRows->filter(function ($row) use ($search) {
@@ -2047,9 +2047,23 @@ private function upgradeLegacyShotStockFigures(
                 // leaving sold_quantity (and recorded sales) untouched.
                 $openingStock = (float) $stockEntryItem->opening_stock;
                 $soldQuantity = (float) $stockEntryItem->sold_quantity;
-                $newOrdered = max(0, $newStock + $soldQuantity - $openingStock);
 
-                $stockEntryItem->ordered_stock = $newOrdered;
+                // ordered_stock can only ADD to stock, so it cannot go negative to
+                // pull the total back down. The lowest closing_stock reachable by
+                // only adjusting ordered_stock (down to 0) is opening - sold - if
+                // the director wants to go lower than that (a genuine reduction,
+                // e.g. 52 -> 50), we must lower opening_stock itself instead;
+                // otherwise ordered_stock silently clamps to 0 and nothing changes,
+                // even though the save "succeeds".
+                $flooredByOrdersAlone = max(0, $openingStock - $soldQuantity);
+
+                if ($newStock >= $flooredByOrdersAlone) {
+                    $stockEntryItem->ordered_stock = $newStock + $soldQuantity - $openingStock;
+                } else {
+                    $stockEntryItem->opening_stock = max(0, $newStock + $soldQuantity);
+                    $stockEntryItem->ordered_stock = 0;
+                }
+
                 $stockEntryItem->price = $baseSellingPrice;
                 $stockEntryItem->purchase_price = $basePurchasePrice;
                 $stockEntryItem->save();

@@ -55,10 +55,6 @@
         border-color: #e2e8f0;
         cursor: not-allowed;
     }
-    .item-input.unit-select {
-        cursor: pointer;
-        min-width: 120px;
-    }
     .sticky-summary {
         position: sticky;
         bottom: 0;
@@ -237,9 +233,8 @@
                     <table class="table compact-table mb-0">
                         <thead>
                             <tr>
-                                <th style="width: 25%">Product / Item</th>
-                                <th class="text-center" style="width: 12%">Unit</th>
-                                <th class="text-center" style="width: 10%">Price</th>
+                                <th style="width: 35%">Product / Item</th>
+                                <th class="text-center" style="width: 12%">Price</th>
                                 <th class="text-center" style="width: 10%">Opening</th>
                                 <th class="text-center" style="width: 10%">Orders</th>
                                 <th class="text-center" style="width: 10%">Closing</th>
@@ -249,30 +244,24 @@
                         </thead>
                         <tbody>
                             @foreach($paginatedItems as $index => $item)
+                                @php
+                                    $baseUnit = ($item['product_units'] ?? collect())->firstWhere('is_base_unit', true)
+                                        ?? ($item['product_units'] ?? collect())->first();
+                                    $baseUnitName = $baseUnit->unit_name ?? 'Bottle';
+                                    $baseUnitPrice = $baseUnit->price?->selling_price ?? $item['price'];
+                                @endphp
                                 <tr data-item-id="{{ $item['id'] }}">
                                     <td data-label="Product">
                                         <div class="fw-bold text-dark">{{ $item['name'] }}</div>
                                         <div class="small text-muted">{{ $item['category'] }}</div>
                                         <input type="hidden" name="items[{{ $index }}][item_id]" value="{{ $item['id'] }}">
-                                        <input type="hidden" name="items[{{ $index }}][price]" value="{{ $item['price'] }}">
+                                        <input type="hidden" name="items[{{ $index }}][price]" value="{{ $baseUnitPrice }}">
+                                        <input type="hidden" name="items[{{ $index }}][unit_name]" value="{{ $baseUnitName }}">
                                         <input type="hidden" name="items[{{ $index }}][purchase_price]" value="{{ $item['purchase_price'] ?? 0 }}">
                                         <input type="hidden" name="items[{{ $index }}][expiry_date]" value="">
                                     </td>
-                                    <td data-label="Unit">
-                                        <select name="items[{{ $index }}][unit_name]" class="item-input unit-select">
-                                            @if(isset($item['product_units']) && $item['product_units']->count() > 0)
-                                                @foreach($item['product_units'] as $unit)
-                                                    <option value="{{ $unit->unit_name }}" data-price="{{ $unit->price?->selling_price ?? $item['price'] }}" data-conversion="{{ $unit->conversion_factor }}" @if($unit->unit_name === 'Bottle' || $unit->unit_name === 'bottle') selected @endif>
-                                                        {{ $unit->unit_name }} @if($unit->is_base_unit)(base)@endif - MWK {{ number_format($unit->price?->selling_price ?? $item['price']) }}
-                                                    </option>
-                                                @endforeach
-                                            @else
-                                                <option value="Bottle" data-price="{{ $item['price'] }}" data-conversion="1" selected>Bottle - MWK {{ number_format($item['price']) }}</option>
-                                            @endif
-                                        </select>
-                                    </td>
                                     <td data-label="Price" class="text-center text-secondary fw-semibold">
-                                        <span class="price-display">{{ number_format($item['bar_item_price'] ?? $item['price']) }}</span>
+                                        <span class="price-display">{{ number_format($baseUnitPrice) }}</span>
                                     </td>
                                     <td data-label="Opening" class="text-center">
                                         <input type="hidden" name="items[{{ $index }}][opening_stock]" class="opening-stock" value="{{ $item['opening_stock'] }}">
@@ -368,42 +357,7 @@
 </div>
 
 <script>
-function updatePriceForUnit(selectElement) {
-    const row = selectElement.closest('tr');
-    if (!row) return;
-
-    const selectedOption = selectElement.options[selectElement.selectedIndex];
-    const newPrice = parseFloat(selectedOption.dataset.price) || 0;
-
-    const priceInput = row.querySelector('input[name*="[price]"]');
-    if (priceInput) {
-        priceInput.value = newPrice;
-    }
-
-    const priceDisplay = row.querySelector('.price-display');
-    if (priceDisplay) {
-        priceDisplay.textContent = newPrice.toLocaleString();
-    }
-
-    const salesInput = row.querySelector('.sales');
-    if (salesInput) {
-        salesInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-}
-
 document.addEventListener('DOMContentLoaded', function() {
-    // Ensure unit dropdowns are clickable
-    document.querySelectorAll('.unit-select').forEach(select => {
-        select.style.pointerEvents = 'auto';
-        select.style.cursor = 'pointer';
-    });
-
-    document.addEventListener('change', function(e) {
-        if (e.target.matches('.unit-select')) {
-            updatePriceForUnit(e.target);
-        }
-    });
-
     document.addEventListener('input', function(e) {
         if (e.target.matches('.sales')) {
             updateSaleRow(e.target.closest('tr'));
@@ -427,31 +381,23 @@ document.addEventListener('DOMContentLoaded', function() {
         const openingStock = parseFloat(row.querySelector('.opening-stock').value) || 0;
         const orders = parseFloat(row.querySelector('.orders').value) || 0;
         const sales = parseFloat(row.querySelector('.sales').value) || 0;
-        const unitSelect = row.querySelector('.unit-select');
-        const selectedOption = unitSelect.options[unitSelect.selectedIndex];
-        const price = parseFloat(selectedOption.dataset.price) || parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
-        const conversionFactor = parseFloat(selectedOption.dataset.conversion) || 1;
+        const price = parseFloat(row.querySelector('input[name*="[price]"]').value) || 0;
 
         const availableStock = openingStock + orders;
-        const salesInBaseUnits = sales * conversionFactor;
 
-        if (salesInBaseUnits > availableStock) {
-            const maxSalesInSelectedUnit = Math.floor(availableStock / conversionFactor);
-            row.querySelector('.sales').value = maxSalesInSelectedUnit;
-            alert('Insufficient stock. Max available: ' + maxSalesInSelectedUnit + ' ' + selectedOption.text.trim() + '.');
+        if (sales > availableStock) {
+            const maxSales = Math.floor(availableStock);
+            row.querySelector('.sales').value = maxSales;
+            alert('Insufficient stock. Max available: ' + maxSales + '.');
         }
 
         const finalSales = parseFloat(row.querySelector('.sales').value) || 0;
-        const finalSalesInBaseUnits = finalSales * conversionFactor;
-        const closingStock = Math.max(0, availableStock - finalSalesInBaseUnits);
+        const closingStock = Math.max(0, availableStock - finalSales);
         row.querySelector('.closing-stock').value = Number.isInteger(closingStock) ? closingStock : closingStock.toFixed(1);
 
         const closingDisplay = row.querySelector('.closing-display');
         if (closingDisplay) {
-            const displayClosing = conversionFactor > 1
-                ? Math.floor(closingStock / conversionFactor)
-                : closingStock;
-            closingDisplay.textContent = Number(displayClosing).toLocaleString();
+            closingDisplay.textContent = Number(closingStock).toLocaleString();
         }
 
         const salesAmount = finalSales * price;
