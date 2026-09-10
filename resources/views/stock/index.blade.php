@@ -3,6 +3,10 @@
 @section('content')
 <link href="{{ asset('css/pixies.css') }}" rel="stylesheet">
 
+@php
+    $canManageStock = auth()->user()->isDirector() || auth()->user()->isManager();
+@endphp
+
 <div class="container-fluid px-4 py-4">
     <!-- Header with Search & Filter -->
     <div class="row mb-4">
@@ -15,7 +19,7 @@
                             <p class="text-muted small mb-0">View and manage current bar stock across all locations.</p>
                         </div>
                         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
-                            @if(auth()->user()->isDirector())
+                            @if($canManageStock)
                                 <button type="button" class="btn btn-success text-nowrap" data-bs-toggle="modal" data-bs-target="#addStockModal">
                                     <i class="bi bi-plus-circle me-1"></i> Add New Stock
                                 </button>
@@ -88,7 +92,7 @@
                                 <th class="border-0 text-uppercase text-muted small">Selling Price</th>
                                 <th class="border-0 text-uppercase text-muted small">Markup</th>
                                 <th class="border-0 text-uppercase text-muted small">Last Updated</th>
-                                @if(auth()->user()->isDirector())
+                                @if($canManageStock)
                                     <th class="border-0 text-uppercase text-muted small">Actions</th>
                                 @endif
                             </tr>
@@ -100,7 +104,7 @@
                                     <td class="align-middle fw-bold text-dark">{{ $row['item_name'] }}</td>
                                     <td class="align-middle text-capitalize"><span class="badge bg-secondary bg-opacity-10 text-dark border-0 px-2 py-1">{{ $row['category'] }}</span></td>
                                     <td class="align-middle">
-                                        @if(auth()->user()->isDirector())
+                                        @if($canManageStock)
                                             <span class="editable-stock fw-bold text-primary" onclick="editStock({{ $row['item_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})" style="cursor: pointer;" title="Click to edit stock">
                                                 {{ number_format($row['stock']) }}
                                                 <i class="bi bi-pencil-square small ms-1 opacity-75"></i>
@@ -120,7 +124,7 @@
                                         @endif
                                     </td>
                                     <td class="align-middle text-muted small">{{ \Carbon\Carbon::parse($row['last_updated'])->format('M d, Y') }}</td>
-                                    @if(auth()->user()->isDirector())
+                                    @if($canManageStock)
                                         <td class="align-middle">
                                             <div class="btn-group">
                                                 <button class="btn btn-sm btn-outline-success" onclick="restockStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }}, {{ $row['selling_price'] }})">
@@ -152,7 +156,7 @@
     </div>
 </div>
 
-@if(auth()->user()->isDirector())
+@if($canManageStock)
 <!-- Restock Modal (Auto-adds to previous stock) -->
 <div class="modal fade" id="restockModal" tabindex="-1">
     <div class="modal-dialog">

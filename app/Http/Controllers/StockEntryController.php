@@ -1735,52 +1735,75 @@ private function resolveSellerStockFigures(
 
 private function getLatestClosingStockForBar(int $barId): array
 {
-    $latestEntry = Sale::where('bar_id', $barId)
-        ->orderBy('date', 'desc')
-        ->orderBy('id', 'desc')
-        ->with('stockEntryItems')
-        ->first();
-
-    if (! $latestEntry) {
-        return [];
-    }
-
-    return $latestEntry->stockEntryItems
-        ->pluck('closing_stock', 'item_id')
-        ->toArray();
+    return $this->latestClosingPerItemForBar($barId);
 }
 
 /**
- * Closing stock carried forward from the most recent stock entry that was
- * recorded BEFORE the given entry. This keeps the seller's opening stock in
- * sync with the director stock overview (which always shows the latest entry
- * regardless of date) instead of only looking at the previous calendar day,
- * which can be empty when entries are a day or more apart.
+ * Closing stock carried forward from the entries recorded BEFORE the given
+ * entry. This keeps the seller's opening stock in sync with the director stock
+ * overview (which always shows the latest recorded value per item regardless of
+ * date) instead of only looking at the previous calendar day, which can be empty
+ * when entries are a day or more apart.
  */
 private function getPreviousClosingStockForBar(int $barId, string $currentDate, ?int $currentId = null): array
 {
-    $latestEntry = Sale::where('bar_id', $barId)
-        ->where(function ($query) use ($currentDate, $currentId) {
-            $query->where('date', '<', $currentDate);
-            if ($currentId) {
-                $query->orWhere(function ($query) use ($currentDate, $currentId) {
-                    $query->where('date', $currentDate)
-                        ->where('id', '<', $currentId);
+    return $this->latestClosingPerItemForBar($barId, $currentDate, $currentId);
+}
+
+/**
+ * Latest closing_stock PER ITEM across all of a bar's stock entries.
+ *
+ * This mirrors the director Stock Overview (stockOverview), which groups every
+ * recorded stock_entry_item by bar + item and keeps the most recent one no
+ * matter how far back it was recorded.
+ *
+ * The previous implementation only inspected the single most-recent Sale entry.
+ * Because a daily entry stores rows ONLY for the items that had activity that
+ * day (untouched rows are skipped on save), every item missing from that one
+ * entry was carried over as 0 on the seller sheet even though the director still
+ * showed stock for it - the exact "seller sees 0 for almost everything, director
+ * sees full stock" mismatch. Scanning per item across all entries fixes it.
+ *
+ * When $beforeDate (and optionally $beforeId) is provided, only entries strictly
+ * prior to that entry are considered.
+ *
+ * @return array<int, float> map of item_id => latest recorded closing_stock
+ */
+private function latestClosingPerItemForBar(int $barId, ?string $beforeDate = null, ?int $beforeId = null): array
+{
+    $query = StockEntryItem::query()
+        ->join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+        ->where('sales.bar_id', $barId);
+
+    if ($beforeDate !== null) {
+        $query->where(function ($q) use ($beforeDate, $beforeId) {
+            $q->where('sales.date', '<', $beforeDate);
+            if ($beforeId) {
+                $q->orWhere(function ($q2) use ($beforeDate, $beforeId) {
+                    $q2->where('sales.date', $beforeDate)
+                        ->where('sales.id', '<', $beforeId);
                 });
             }
-        })
-        ->orderBy('date', 'desc')
-        ->orderBy('id', 'desc')
-        ->with('stockEntryItems')
-        ->first();
-
-    if (! $latestEntry) {
-        return [];
+        });
     }
 
-    return $latestEntry->stockEntryItems
-        ->pluck('closing_stock', 'item_id')
-        ->toArray();
+    $rows = $query
+        ->orderBy('sales.date', 'desc')
+        ->orderBy('stock_entry_items.updated_at', 'desc')
+        ->orderBy('stock_entry_items.id', 'desc')
+        ->get(['stock_entry_items.item_id', 'stock_entry_items.closing_stock']);
+
+    $latestPerItem = [];
+    foreach ($rows as $row) {
+        // Rows come back newest-first, so the first time an item appears is its
+        // latest recorded closing stock. Older rows for the same item are
+        // ignored, matching the director overview's groupBy()->map->first().
+        if (! array_key_exists($row->item_id, $latestPerItem)) {
+            $latestPerItem[$row->item_id] = (float) $row->closing_stock;
+        }
+    }
+
+    return $latestPerItem;
 }
 
 private function upgradeLegacyShotStockFigures(
@@ -1941,7 +1964,7 @@ private function upgradeLegacyShotStockFigures(
     public function updateStock(Request $request)
     {
         $user = Auth::user();
-        if (!$user->isDirector()) {
+        if (!$user->isDirector() && !$user->isManager()) {
             abort(403);
         }
 
@@ -2000,31 +2023,54 @@ private function upgradeLegacyShotStockFigures(
             }
             $item->save();
 
-            // Update the latest stock entry item for this bar
-            $latestStockEntry = Sale::where('bar_id', $bar->id)
-                ->orderBy('date', 'desc')
+            // Find this item's own most recent stock entry row for this bar,
+            // regardless of which day's sheet it lives in. A day's sheet only
+            // stores rows for items that had activity that day, so the bar's
+            // latest SALE can easily be a sheet that has never touched this
+            // particular item - looking at the latest sale first (as before)
+            // silently skipped the update whenever that happened, so the
+            // director's edit never showed up for the seller.
+            $stockEntryItem = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+                ->where('sales.bar_id', $bar->id)
+                ->where('stock_entry_items.item_id', $item->id)
+                ->orderBy('sales.date', 'desc')
+                ->orderBy('stock_entry_items.updated_at', 'desc')
+                ->orderBy('stock_entry_items.id', 'desc')
+                ->select('stock_entry_items.*')
                 ->first();
 
-            if ($latestStockEntry) {
-                $stockEntryItem = StockEntryItem::where('stock_entry_id', $latestStockEntry->id)
-                    ->where('item_id', $item->id)
-                    ->first();
+            if ($stockEntryItem) {
+                // Apply the director's new quantity WITHOUT turning the difference
+                // into sales. The model computes closing_stock as
+                // opening_stock + ordered_stock - sold_quantity, so we pin the
+                // ordered amount to make the resulting stock equal $newStock while
+                // leaving sold_quantity (and recorded sales) untouched.
+                $openingStock = (float) $stockEntryItem->opening_stock;
+                $soldQuantity = (float) $stockEntryItem->sold_quantity;
+                $newOrdered = max(0, $newStock + $soldQuantity - $openingStock);
 
-                if ($stockEntryItem) {
-                    // Apply the director's new quantity WITHOUT turning the difference
-                    // into sales. The model computes closing_stock as
-                    // opening_stock + ordered_stock - sold_quantity, so we pin the
-                    // ordered amount to make the resulting stock equal $newStock while
-                    // leaving sold_quantity (and recorded sales) untouched.
-                    $openingStock = (float) $stockEntryItem->opening_stock;
-                    $soldQuantity = (float) $stockEntryItem->sold_quantity;
-                    $newOrdered = max(0, $newStock + $soldQuantity - $openingStock);
+                $stockEntryItem->ordered_stock = $newOrdered;
+                $stockEntryItem->price = $baseSellingPrice;
+                $stockEntryItem->purchase_price = $basePurchasePrice;
+                $stockEntryItem->save();
+            } else {
+                // This item has never had a stock entry for this bar. Create one
+                // on today's sheet (creating the sheet if needed) so the seller
+                // sees the new stock immediately, the same way restockStock()
+                // bootstraps a missing row.
+                $todaySale = Sale::firstOrCreate(
+                    ['bar_id' => $bar->id, 'date' => now()->format('Y-m-d')],
+                    ['user_id' => $user->id]
+                );
 
-                    $stockEntryItem->ordered_stock = $newOrdered;
-                    $stockEntryItem->price = $baseSellingPrice;
-                    $stockEntryItem->purchase_price = $basePurchasePrice;
-                    $stockEntryItem->save();
-                }
+                StockEntryItem::create([
+                    'stock_entry_id' => $todaySale->id,
+                    'item_id' => $item->id,
+                    'opening_stock' => 0,
+                    'ordered_stock' => $newStock,
+                    'price' => $baseSellingPrice,
+                    'purchase_price' => $basePurchasePrice,
+                ]);
             }
 
             // Update bar item price (this should take priority)
@@ -2123,7 +2169,7 @@ private function upgradeLegacyShotStockFigures(
     public function addStock(Request $request)
     {
         $user = Auth::user();
-        if (!$user->isDirector()) {
+        if (!$user->isDirector() && !$user->isManager()) {
             abort(403);
         }
 
@@ -2303,7 +2349,7 @@ private function upgradeLegacyShotStockFigures(
     public function restockStock(Request $request)
     {
         $user = Auth::user();
-        if (!$user->isDirector()) {
+        if (!$user->isDirector() && !$user->isManager()) {
             abort(403);
         }
 
@@ -2457,7 +2503,7 @@ private function upgradeLegacyShotStockFigures(
     public function deleteStock(Request $request)
     {
         $user = Auth::user();
-        if (!$user->isDirector()) {
+        if (!$user->isDirector() && !$user->isManager()) {
             abort(403);
         }
 

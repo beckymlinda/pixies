@@ -58,16 +58,18 @@
 
 <div class="container-fluid p-0">
     <!-- Modern Header -->
-    <div class="reporting-header d-flex align-items-center justify-content-between shadow-sm">
+    <div class="reporting-header d-flex align-items-center justify-content-between shadow-sm flex-wrap gap-3">
         <div>
             <h1 class="h4 fw-bold mb-1 text-dark">Balance</h1>
-            <p class="text-muted small mb-0">Record payments and shift expenditure to close your day.</p>
+            <p class="text-muted small mb-0">Record payments and shift expenditure to close a day's shift.</p>
         </div>
-        <div class="d-flex gap-2">
-            <span class="badge bg-light text-dark border border-secondary border-opacity-10 px-3 py-2 rounded-pill">
-                📅 {{ now()->format('M d, Y') }}
-            </span>
-        </div>
+        <form method="GET" action="{{ route('reporting.create') }}" class="d-flex align-items-center gap-2">
+            <label for="balanceDate" class="small fw-bold text-muted mb-0 text-nowrap">
+                <i class="bi bi-calendar3 me-1"></i>Balancing for
+            </label>
+            <input type="date" id="balanceDate" name="date" value="{{ $date }}" max="{{ now()->format('Y-m-d') }}"
+                   class="form-control form-control-sm" style="width: auto;" onchange="this.form.submit()">
+        </form>
     </div>
 
     <div class="px-4 pb-5">
@@ -76,11 +78,22 @@
                 <i class="bi bi-check-circle-fill me-2"></i>{{ session('success') }}
             </div>
         @endif
-        
+
         @if(session('error') || $errors->any())
             <div class="alert alert-danger border-0 shadow-sm rounded-3 mb-4">
                 <i class="bi bi-exclamation-triangle-fill me-2"></i>
                 @if(session('error')) {{ session('error') }} @else Please correct the errors below. @endif
+            </div>
+        @endif
+
+        @if($existingReport)
+            <div class="alert alert-info border-0 shadow-sm rounded-3 mb-4">
+                <i class="bi bi-info-circle-fill me-2"></i>A report for {{ \Carbon\Carbon::parse($date)->format('l, M d, Y') }} already exists — saving will update it.
+            </div>
+        @else
+            <div class="alert alert-light border shadow-sm rounded-3 mb-4">
+                <i class="bi bi-calendar-check me-2"></i>Balancing shift for <strong>{{ \Carbon\Carbon::parse($date)->format('l, M d, Y') }}</strong>.
+                <a href="#" onclick="document.getElementById('balanceDate').showPicker ? document.getElementById('balanceDate').showPicker() : document.getElementById('balanceDate').focus(); return false;" class="ms-1">Change day</a>
             </div>
         @endif
 
@@ -107,6 +120,7 @@
             @csrf
             @if($existingReport) @method('PUT') @endif
             <input type="hidden" name="total_sales" value="{{ $totalSales }}">
+            <input type="hidden" name="report_date" value="{{ $date }}">
 
             <div class="card border-0 shadow-sm rounded-4 mb-4 overflow-hidden">
                 <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">

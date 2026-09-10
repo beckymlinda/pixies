@@ -40,6 +40,10 @@ class ActivityLog extends Model
             'item_created' => 'New Item Created',
             'item_updated' => 'Item Updated',
             'item_deleted' => 'Item Removed',
+            'daily_report_submitted' => 'Balance Submitted',
+            'daily_report_resubmitted' => 'Balance Resubmitted',
+            'daily_report_updated' => 'Balance Updated',
+            'daily_report_deleted' => 'Balance Deleted',
             default => ucfirst(str_replace('_', ' ', $this->action)),
         };
     }
@@ -55,6 +59,8 @@ class ActivityLog extends Model
             'item_created' => 'bi-plus-square',
             'item_updated' => 'bi-pencil-square',
             'item_deleted' => 'bi-trash',
+            'daily_report_submitted', 'daily_report_resubmitted', 'daily_report_updated' => 'bi-clipboard-check',
+            'daily_report_deleted' => 'bi-clipboard-x',
             default => 'bi-activity',
         };
     }
@@ -70,6 +76,9 @@ class ActivityLog extends Model
             'item_created' => 'info',
             'item_updated' => 'primary',
             'item_deleted' => 'danger',
+            'daily_report_submitted', 'daily_report_resubmitted' => 'success',
+            'daily_report_updated' => 'primary',
+            'daily_report_deleted' => 'danger',
             default => 'secondary',
         };
     }

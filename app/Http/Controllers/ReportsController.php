@@ -16,6 +16,7 @@ use App\Models\DailyReport;
 use App\Models\DailyReportPayment;
 use App\Models\User;
 use App\Models\BottleCount;
+use App\Models\ActivityLog;
 use App\Support\CsvExport;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -514,10 +515,10 @@ class ReportsController extends Controller
     /**
      * Show the form for creating a new daily report.
      */
-    public function reportingCreate()
+    public function reportingCreate(Request $request)
     {
         $user = Auth::user();
-        
+
         // Authorization: Only bar seller, manager, director can access
         if (!$user->isSeller() && !$user->isManager() && !$user->isDirector()) {
             abort(403, 'Unauthorized access to reporting');
@@ -528,17 +529,34 @@ class ReportsController extends Controller
             abort(403, 'Sellers must be assigned to a bar to create reports');
         }
 
-        // Check if today's report already exists
-        $existingReport = DailyReport::getTodayReport();
-        
-        // Get today's stock entry to calculate total sales
+        // Sellers sell today and balance the next morning, so "today" would
+        // show an empty shift. Let them pick which day they're balancing,
+        // defaulting to yesterday (the most recently completed shift).
         $today = now()->format('Y-m-d');
+        $date = $request->query('date');
+        if (!$date || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) {
+            $date = now()->subDay()->format('Y-m-d');
+        }
+        if ($date > $today) {
+            $date = $today;
+        }
+
+        // Check if a report for the chosen date already exists
+        $existingReport = null;
+        if ($user->bar_id) {
+            $existingReport = DailyReport::where('user_id', $user->id)
+                ->where('bar_id', $user->bar_id)
+                ->where('date', $date)
+                ->first();
+        }
+
+        // Get the chosen day's stock entry to calculate total sales
         $stockEntry = null;
         $totalSales = 0;
 
         if ($user->bar_id) {
-            // Try to get the most recent stock entry for today
-            $stockEntry = Sale::where('date', $today)
+            // Try to get the most recent stock entry for that day
+            $stockEntry = Sale::where('date', $date)
                 ->where('bar_id', $user->bar_id)
                 ->orderBy('updated_at', 'desc') // Get the most recently updated entry
                 ->first();
@@ -546,21 +564,21 @@ class ReportsController extends Controller
             if ($stockEntry) {
                 $totalSales = $stockEntry->stockEntryItems->sum('sales_amount');
             }
-            
-            // Fallback: If no stock entry found, try to get any stock entry for today
+
+            // Fallback: If no stock entry found, try to get any stock entry for that day
             if ($totalSales == 0) {
-                $allStockEntries = Sale::where('date', $today)
+                $allStockEntries = Sale::where('date', $date)
                     ->where('bar_id', $user->bar_id)
                     ->get();
-                    
+
                 foreach ($allStockEntries as $entry) {
                     $totalSales += $entry->stockEntryItems->sum('sales_amount');
                 }
             }
         }
 
-        // Get expenses for today to include in calculations
-        $expenses = Expense::where('date', $today)
+        // Get expenses for that day to include in calculations
+        $expenses = Expense::where('date', $date)
                            ->whereHas('stockEntry', function ($query) use ($user) {
                                if ($user->isSeller()) {
                                    $query->where('bar_id', $user->bar_id)
@@ -573,18 +591,18 @@ class ReportsController extends Controller
 
         // Fallback queries if no expenses found
         if ($expenses->isEmpty()) {
-            $expenses = Expense::where('date', $today)
+            $expenses = Expense::where('date', $date)
                                ->where('user_id', $user->id)
                                ->get();
         }
 
         if ($expenses->isEmpty()) {
-            $expenses = Expense::where('date', $today)->get();
+            $expenses = Expense::where('date', $date)->get();
         }
 
         // Calculate financial values
         $totalExpenses = $expenses->sum('amount');
-        $creditSales = CustomerTab::where('date', $today)
+        $creditSales = CustomerTab::where('date', $date)
             ->where('bar_id', $user->bar_id)
             ->where('status', '!=', 'paid')
             ->sum('balance');
@@ -592,13 +610,14 @@ class ReportsController extends Controller
         $paymentMethods = DailyReportPayment::getPaymentMethods();
         $expenditureTypes = Expense::balanceExpenditureTypes();
         $shiftExpenditures = $this->filterBalanceExpenditures(
-            $this->getShiftExpenditures($user, $today, $stockEntry)
+            $this->getShiftExpenditures($user, $date, $stockEntry)
         );
         $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
         $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
         $balancePayments = $existingReport ? $this->balancePaymentsForForm($existingReport) : [];
 
         return view('reporting.create', compact(
+            'date',
             'existingReport',
             'stockEntry',
             'totalSales',
@@ -630,6 +649,7 @@ class ReportsController extends Controller
         ]);
 
         $validated = $request->validate([
+            'report_date' => 'required|date|before_or_equal:today',
             'payments' => 'required|array|min:1',
             'payments.*.payment_method' => 'required|in:' . DailyReportPayment::paymentMethodKeys(),
             'payments.*.amount' => 'required|numeric|min:0',
@@ -645,8 +665,8 @@ class ReportsController extends Controller
         try {
             DB::beginTransaction();
 
-            $today = now()->format('Y-m-d');
-            $stockEntry = Sale::where('date', $today)
+            $date = $validated['report_date'];
+            $stockEntry = Sale::where('date', $date)
                 ->where('bar_id', $user->bar_id)
                 ->orderBy('updated_at', 'desc')
                 ->first();
@@ -658,7 +678,7 @@ class ReportsController extends Controller
                 [
                     'user_id' => $user->id,
                     'bar_id' => $user->bar_id,
-                    'date' => $today,
+                    'date' => $date,
                 ],
                 [
                     'cash_in_hand' => $cashInHand,
@@ -681,7 +701,21 @@ class ReportsController extends Controller
                 ]);
             }
 
-            $this->syncShiftExpenditures($request, $user, $stockEntry);
+            $this->syncShiftExpenditures($request, $user, $stockEntry, $date);
+
+            ActivityLog::log([
+                'user_id' => $user->id,
+                'action' => $dailyReport->wasRecentlyCreated ? 'daily_report_submitted' : 'daily_report_resubmitted',
+                'description' => "{$user->name} balanced {$date} at ".($user->bar->name ?? 'their bar').": cash MWK ".number_format($cashInHand, 0).", total collected MWK ".number_format($totalPayments, 0),
+                'subject_type' => DailyReport::class,
+                'subject_id' => $dailyReport->id,
+                'new_values' => [
+                    'date' => $date,
+                    'bar' => $user->bar->name ?? null,
+                    'cash_in_hand' => $cashInHand,
+                    'total_payments' => $totalPayments,
+                ],
+            ]);
 
             DB::commit();
 
@@ -773,6 +807,15 @@ class ReportsController extends Controller
         // EXPENSES (operational only â€” debt is tracked as credit sales)
         $totalExpenses = $expenses->sum('amount');
 
+        // Shift expenditure totals shown in the Payment Breakdown table
+        $lunchTotal = (float) $expenses->where('type', 'lunch')->sum('amount');
+        $damagesTotal = (float) $expenses->where('type', 'damages')->sum('amount');
+        $ngongoleTotal = (float) CustomerTab::where('bar_id', $dailyReport->bar_id)
+            ->where('date', $dailyReport->date)
+            ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+            ->sum('amount');
+        $grandTotal = $totalCollected + $lunchTotal + $damagesTotal + $ngongoleTotal;
+
         $reconciliation = $this->shiftCollectionMath(
             (float) $totalSales,
             (float) $creditSales,
@@ -837,7 +880,11 @@ class ReportsController extends Controller
             'hasMissingMoney',
             'hasSurplusMoney',
             'expectedCollected',
-            'totalPayments'
+            'totalPayments',
+            'lunchTotal',
+            'damagesTotal',
+            'ngongoleTotal',
+            'grandTotal'
         ));
     }
 
@@ -985,6 +1032,9 @@ class ReportsController extends Controller
 
             ['cashInHand' => $cashInHand, 'totalPayments' => $totalPayments] = $this->resolveCashFromPayments($validated['payments']);
 
+            $oldCashInHand = $dailyReport->cash_in_hand;
+            $oldTotalPayments = $dailyReport->total_payments;
+
             $dailyReport->update([
                 'cash_in_hand' => $cashInHand,
                 'total_payments' => $totalPayments,
@@ -1005,6 +1055,22 @@ class ReportsController extends Controller
             }
 
             $this->syncShiftExpenditures($request, $user, $stockEntry, $dailyReport->date->format('Y-m-d'));
+
+            ActivityLog::log([
+                'user_id' => $user->id,
+                'action' => 'daily_report_updated',
+                'description' => "{$user->name} updated the balance for {$dailyReport->date->format('Y-m-d')} at ".($dailyReport->bar->name ?? 'their bar').": cash MWK ".number_format($cashInHand, 0).", total collected MWK ".number_format($totalPayments, 0),
+                'subject_type' => DailyReport::class,
+                'subject_id' => $dailyReport->id,
+                'old_values' => [
+                    'cash_in_hand' => $oldCashInHand,
+                    'total_payments' => $oldTotalPayments,
+                ],
+                'new_values' => [
+                    'cash_in_hand' => $cashInHand,
+                    'total_payments' => $totalPayments,
+                ],
+            ]);
 
             DB::commit();
 
@@ -1040,10 +1106,22 @@ class ReportsController extends Controller
 
         try {
             DB::beginTransaction();
-            
+
+            $reportDate = $dailyReport->date->format('Y-m-d');
+            $barName = $dailyReport->bar->name ?? 'their bar';
+
             $dailyReport->payments()->delete();
             $dailyReport->delete();
-            
+
+            ActivityLog::log([
+                'user_id' => $user->id,
+                'action' => 'daily_report_deleted',
+                'description' => "{$user->name} deleted the balance for {$reportDate} at {$barName}",
+                'subject_type' => DailyReport::class,
+                'subject_id' => $dailyReport->id,
+                'old_values' => ['date' => $reportDate, 'bar' => $barName],
+            ]);
+
             DB::commit();
 
             return redirect()
