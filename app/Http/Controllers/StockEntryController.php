@@ -134,8 +134,8 @@ class StockEntryController extends Controller
                     : 'A stock sheet for ' . \Carbon\Carbon::parse($date)->format('M d, Y') . ' already exists. Continue that sheet instead.');
         }
 
-        // Get all items with their units in database insertion order
-        $items = Item::with('productUnits')->where('is_hidden', false)->orderBy('id')->get();
+        // Only items that belong to this bar's catalog, in database insertion order
+        $items = $this->itemsForBar($user->bar_id);
 
         // Get approved order requests sum for this bar and date
         $todayApprovedOrders = $this->getApprovedOrderQuantities($user->bar_id, $date);
@@ -514,8 +514,8 @@ class StockEntryController extends Controller
 
         $stockEntry->load(['bar', 'user', 'stockEntryItems.item', 'expenses', 'payments']);
 
-        // Get all items first (without pagination) to prepare data
-        $allItems = Item::with('productUnits')->where('is_hidden', false)->orderBy('id')->get();
+        // Only items that belong to this bar's catalog, without pagination
+        $allItems = $this->itemsForBar($stockEntry->bar_id);
 
         // Carry forward the closing stock from the most recent prior stock
         // entry (any date before this one) so the seller's opening stock and
@@ -1660,6 +1660,27 @@ class StockEntryController extends Controller
             return response()->json(['success' => false, 'message' => 'Error creating warehouse request: ' . $e->getMessage()], 500);
         }
     }
+/**
+ * Items that actually belong to a bar's catalog, for the seller Sell sheet.
+ * Items are a shared master list, not inherently per-bar, so without this
+ * filter every bar's Sell page showed every item in the whole system (with
+ * 0 stock for ones that bar never touched). "Belongs to this bar" means the
+ * bar has a price for it (set via Add/Edit/Restock Stock) or has ever
+ * recorded actual stock for it (e.g. via an approved warehouse request) -
+ * either alone can exist without the other depending on how it arrived.
+ */
+private function itemsForBar(int $barId)
+{
+    return Item::with('productUnits')
+        ->where('is_hidden', false)
+        ->where(function ($query) use ($barId) {
+            $query->whereHas('barItemPrices', fn ($q) => $q->where('bar_id', $barId))
+                ->orWhereHas('stockEntryItems.stockEntry', fn ($q) => $q->where('bar_id', $barId));
+        })
+        ->orderBy('id')
+        ->get();
+}
+
 private function getApprovedOrderQuantities(int $barId, string $date): array
 {
     $rows = DB::table('order_request_items')
@@ -1979,6 +2000,20 @@ private function upgradeLegacyShotStockFigures(
     }
 
     /**
+     * Query params to redirect back to the Stock Overview page with whatever
+     * bar/search filter was active before the action was submitted, instead
+     * of always resetting to "All Bars" - carried through each action form
+     * as hidden filter_bar_id / filter_search fields.
+     */
+    private function stockIndexRedirectParams(Request $request): array
+    {
+        return array_filter([
+            'bar_id' => $request->input('filter_bar_id'),
+            'search' => $request->input('filter_search'),
+        ], fn ($value) => $value !== null && $value !== '');
+    }
+
+    /**
      * Update stock quantity for director
      */
     public function updateStock(Request $request)
@@ -2220,7 +2255,7 @@ private function upgradeLegacyShotStockFigures(
             ]);
 
             DB::commit();
-            return redirect()->route('stock.index')->with('success', 'Stock updated successfully!');
+            return redirect()->route('stock.index', $this->stockIndexRedirectParams($request))->with('success', 'Stock updated successfully!');
         } catch (\Exception $e) {
             DB::rollback();
             return back()->with('error', 'Error updating stock: ' . $e->getMessage());
@@ -2400,7 +2435,7 @@ private function upgradeLegacyShotStockFigures(
             ]);
 
             DB::commit();
-            return redirect()->route('stock.index')->with('success', "Stock added successfully for {$item->name} at {$bar->name}!");
+            return redirect()->route('stock.index', $this->stockIndexRedirectParams($request))->with('success', "Stock added successfully for {$item->name} at {$bar->name}!");
         } catch (\Exception $e) {
             DB::rollback();
             return back()->with('error', 'Error adding stock: ' . $e->getMessage());
@@ -2554,7 +2589,7 @@ private function upgradeLegacyShotStockFigures(
             ]);
 
             DB::commit();
-            return redirect()->route('stock.index')->with('success', "Added {$additionalStock} units to {$item->name} at {$bar->name}!");
+            return redirect()->route('stock.index', $this->stockIndexRedirectParams($request))->with('success', "Added {$additionalStock} units to {$item->name} at {$bar->name}!");
         } catch (\Exception $e) {
             DB::rollback();
             return back()->with('error', 'Error restocking item: ' . $e->getMessage());
@@ -2621,7 +2656,7 @@ private function upgradeLegacyShotStockFigures(
                 ->delete();
 
             DB::commit();
-            return redirect()->route('stock.index')->with('success', 'Stock deleted successfully!');
+            return redirect()->route('stock.index', $this->stockIndexRedirectParams($request))->with('success', 'Stock deleted successfully!');
         } catch (\Exception $e) {
             DB::rollback();
             return back()->with('error', 'Error deleting stock: ' . $e->getMessage());

@@ -55,8 +55,8 @@ class OrderRequestController extends Controller
             return redirect()->route('seller.dashboard')->with('error', 'You must be assigned to a bar to request stock.');
         }
 
-        // Get all items grouped by category
-        $items = Item::orderBy('category')->orderBy('name')->get();
+        // Items in database insertion order (matches the rest of the app)
+        $items = Item::where('is_hidden', false)->orderBy('id')->get();
         $bar = $user->bar;
 
         return view('seller.orders.create', compact('items', 'bar'));

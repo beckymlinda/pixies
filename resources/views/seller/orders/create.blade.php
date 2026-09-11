@@ -6,32 +6,27 @@
     .order-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
         padding: 1rem 2rem;
         margin-bottom: 1.5rem;
     }
     .qty-btn {
-        width: 36px;
-        height: 36px;
-        border-radius: 50% !important;
+        width: 32px;
+        height: 32px;
+        border-radius: 8px !important;
         display: flex;
         align-items: center;
         justify-content: center;
         padding: 0;
         border: 1px solid #cbd5e1;
         background: white;
-        color: #1e293b;
-        font-weight: bold;
-        transition: all 0.2s;
+        color: #475569;
+        font-weight: 600;
     }
     .qty-btn:hover {
         background: #f1f5f9;
-        border-color: #94a3b8;
     }
     .qty-input {
-        width: 60px;
+        width: 56px;
         text-align: center;
         border: 1px solid #cbd5e1;
         border-radius: 8px;
@@ -39,46 +34,37 @@
         margin: 0 8px;
     }
     .category-tab {
-        border-radius: 50px !important;
-        padding: 0.5rem 1.5rem !important;
+        border-radius: 8px !important;
+        padding: 0.4rem 1.1rem !important;
         font-weight: 600;
+        font-size: 0.875rem;
         border: 1px solid transparent !important;
-        margin-right: 0.5rem;
+        margin-right: 0.4rem;
         color: #64748b !important;
     }
     .category-tab.active {
-        background-color: var(--pixies-primary) !important;
-        color: white !important;
-        border-color: var(--pixies-primary) !important;
-        box-shadow: 0 4px 6px -1px rgba(30, 41, 59, 0.1);
-    }
-    .badge-pill-custom {
-        padding: 0.5rem 1rem;
-        border-radius: 50px;
-        font-weight: 600;
-        font-size: 0.75rem;
+        background-color: #f1f5f9 !important;
+        color: var(--pixies-primary) !important;
+        border-color: #e2e8f0 !important;
     }
     .search-container {
-        max-width: 480px;
+        max-width: 420px;
     }
-    
-    /* Premium glassmorphism floating bottom card for mobile */
+
+    /* Plain, solid floating bottom bar for mobile - no blur/transparency */
     .mobile-floating-action {
         position: fixed;
-        bottom: 1.5rem;
+        bottom: 1rem;
         left: 1rem;
         right: 1rem;
         z-index: 1050;
         transform: translateY(150%);
-        transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        transition: transform 0.2s ease;
     }
-    .mobile-glass-card {
-        background: rgba(255, 255, 255, 0.88);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
-        border: 1px solid rgba(226, 232, 240, 0.8) !important;
-        border-radius: 20px;
-        box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.12), 0 4px 12px -2px rgba(0, 0, 0, 0.06);
+    .mobile-action-card {
+        background: white;
+        border: 1px solid #e2e8f0 !important;
+        border-radius: 14px;
     }
 
     @media (max-width: 991.98px) {
@@ -91,17 +77,19 @@
 
 <div class="container-fluid p-0 content-padding-bottom">
     <!-- Header -->
-    <div class="order-header d-flex align-items-center justify-content-between shadow-sm flex-wrap gap-3">
-        <div class="d-flex align-items-center gap-3 flex-wrap">
-            <h1 class="h4 fw-bold mb-0 text-dark">Request Stock</h1>
-            <div class="vr mx-2 d-none d-md-block"></div>
-            @if($bar)
-                <span class="badge bg-dark text-white badge-pill-custom">📍 {{ $bar->name }}</span>
-            @endif
-            <span class="badge bg-light text-dark border border-secondary border-opacity-20 badge-pill-custom">📅 {{ now()->format('M d, Y') }}</span>
+    <div class="order-header d-flex align-items-center justify-content-between flex-wrap gap-3">
+        <div>
+            <h1 class="h4 fw-bold mb-1 text-dark">Request Stock</h1>
+            <div class="small text-muted">
+                @if($bar)
+                    <i class="bi bi-geo-alt me-1"></i>{{ $bar->name }}
+                    <span class="mx-2">·</span>
+                @endif
+                <i class="bi bi-calendar3 me-1"></i>{{ now()->format('M d, Y') }}
+            </div>
         </div>
         <div>
-            <a href="{{ route('seller.orders.index') }}" class="btn btn-outline-secondary rounded-pill px-3">
+            <a href="{{ route('seller.orders.index') }}" class="btn btn-outline-secondary btn-sm">
                 <i class="bi bi-clock-history me-1"></i> Request History
             </a>
         </div>
@@ -136,9 +124,9 @@
 
         <!-- Search Bar Section -->
         <div class="search-container mb-4">
-            <div class="input-group shadow-sm rounded-pill overflow-hidden bg-white border border-secondary border-opacity-10">
+            <div class="input-group bg-white border rounded-3">
                 <span class="input-group-text border-0 bg-transparent ps-3"><i class="bi bi-search text-muted"></i></span>
-                <input type="text" id="item-search" class="form-control border-0 py-2.5 ps-1 shadow-none" placeholder="Search items by name or category..." onkeyup="filterItems()">
+                <input type="text" id="item-search" class="form-control border-0 shadow-none" placeholder="Search items by name or category..." onkeyup="filterItems()">
                 <button class="btn border-0 text-muted pe-3 shadow-none" type="button" onclick="clearSearch()" id="clear-search-btn" style="display:none;">
                     <i class="bi bi-x-circle-fill text-secondary"></i>
                 </button>
@@ -174,10 +162,10 @@
                         
                         @foreach($categories as $cat)
                             <div class="tab-pane fade {{ $cat === 'all' ? 'show active' : '' }}" id="pills-{{ $cat }}" role="tabpanel">
-                                <div class="card border-0 shadow-sm rounded-4 overflow-hidden mb-5">
+                                <div class="card border rounded-3 mb-5">
                                     <div class="table-responsive">
                                         <table class="table align-middle mb-0">
-                                            <thead class="table-light text-uppercase font-semibold text-muted" style="font-size: 0.75rem;">
+                                            <thead class="table-light text-uppercase text-muted" style="font-size: 0.75rem;">
                                                 <tr>
                                                     <th class="ps-4" style="width: 50%">Item / Product</th>
                                                     <th class="text-center" style="width: 20%">Category</th>
@@ -187,36 +175,26 @@
                                             <tbody>
                                                 @php
                                                     $filteredItems = $cat === 'all' ? $items : $items->where('category', $cat);
-                                                    $itemIndex = 0;
                                                 @endphp
                                                 @forelse($filteredItems as $item)
                                                     <tr class="item-row" data-item-id="{{ $item->id }}">
                                                         <td class="ps-4 py-3">
                                                             <div class="fw-bold text-dark item-name">{{ $item->name }}</div>
-                                                            <div class="small text-muted mb-1">{{ $item->description ?? 'No description' }}</div>
-                                                            <div class="d-flex align-items-center gap-2 mt-1">
-                                                                <span class="badge bg-light text-dark border border-secondary border-opacity-15 px-2.5 py-1 fw-semibold" style="font-size: 0.7rem;">
-                                                                    📦 Stock: {{ $item->director_stock }}
-                                                                </span>
-                                                            </div>
+                                                            <div class="small text-muted">{{ $item->description ?? 'No description' }}</div>
+                                                            <div class="small text-muted">Stock: {{ $item->director_stock }}</div>
                                                         </td>
                                                         <td class="text-center">
-                                                            <span class="badge rounded-pill bg-opacity-10 px-3 py-1 text-capitalize item-category-badge
-                                                                {{ $item->category == 'beer' ? 'bg-warning text-warning' : 
-                                                                   ($item->category == 'spirit' ? 'bg-danger text-danger' : 
-                                                                   ($item->category == 'soda' ? 'bg-info text-info' : 'bg-secondary text-secondary')) }}">
-                                                                {{ $item->category }}
-                                                            </span>
+                                                            <span class="small text-muted text-capitalize item-category-badge">{{ $item->category }}</span>
                                                         </td>
                                                         <td class="pe-4">
                                                             <div class="d-flex align-items-center justify-content-end">
                                                                 <button type="button" class="btn qty-btn dec-btn" data-item-id="{{ $item->id }}">-</button>
-                                                                <input type="number" 
-                                                                    name="items[{{ $item->id }}][quantity]" 
-                                                                    id="qty-input-{{ $item->id }}" 
-                                                                    class="form-control qty-input" 
-                                                                    value="0" 
-                                                                    min="0" 
+                                                                <input type="number"
+                                                                    name="items[{{ $item->id }}][quantity]"
+                                                                    id="qty-input-{{ $item->id }}"
+                                                                    class="form-control qty-input"
+                                                                    value="0"
+                                                                    min="0"
                                                                     step="1"
                                                                     data-item-name="{{ $item->name }}"
                                                                     onchange="updateTotalRequested()">
@@ -225,7 +203,6 @@
                                                             </div>
                                                         </td>
                                                     </tr>
-                                                    @php $itemIndex++; @endphp
                                                 @empty
                                                     <tr class="empty-state-row">
                                                         <td colspan="3" class="text-center text-muted py-5">
@@ -244,7 +221,7 @@
 
                 <!-- Side Summary Panel (Desktop Only) -->
                 <div class="col-lg-4 d-none d-lg-block">
-                    <div class="card border-0 shadow-sm rounded-4 position-sticky" style="top: 90px;">
+                    <div class="card border rounded-3 position-sticky" style="top: 90px;">
                         <div class="card-header bg-white border-bottom py-3">
                             <h5 class="fw-bold mb-0 text-dark"><i class="bi bi-receipt me-2 text-primary"></i>Request Summary</h5>
                         </div>
@@ -266,10 +243,10 @@
                             </div>
 
                             <div class="d-grid gap-2">
-                                <button type="submit" class="btn btn-primary rounded-pill py-2.5 fw-bold shadow-sm" id="submit-btn" disabled>
+                                <button type="submit" class="btn btn-primary fw-bold" id="submit-btn" disabled>
                                     <i class="bi bi-send-fill me-2"></i>Submit Stock Request
                                 </button>
-                                <a href="{{ route('seller.dashboard') }}" class="btn btn-light rounded-pill py-2.5">
+                                <a href="{{ route('seller.dashboard') }}" class="btn btn-light">
                                     Cancel
                                 </a>
                             </div>
@@ -277,10 +254,10 @@
                     </div>
                 </div>
             </div>
-            
-            <!-- Mobile/Tablet Floating Glassmorphic Submit Action Bar -->
+
+            <!-- Mobile/Tablet Floating Submit Action Bar -->
             <div class="mobile-floating-action d-lg-none" id="mobile-floating-panel">
-                <div class="card border-0 mobile-glass-card shadow-lg">
+                <div class="card mobile-action-card shadow-sm">
                     <div class="card-body p-3">
                         <!-- Notes Accordion/Collapse in Mobile Floating Panel -->
                         <div class="collapse mb-2" id="mobile-notes-collapse">
@@ -289,12 +266,12 @@
                                 <textarea name="notes_mobile" id="notes-mobile" class="form-control rounded-3 small" rows="2" placeholder="Provide extra context..." onkeyup="syncNotes('mobile')"></textarea>
                             </div>
                         </div>
-                        
+
                         <div class="d-flex align-items-center justify-content-between gap-3">
                             <div class="ps-2">
                                 <span class="small text-muted d-block fw-semibold" style="font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.5px;">Requested</span>
                                 <span class="h5 mb-0 fw-bold text-primary">
-                                    <span id="mobile-summary-total-bottles">0</span> 
+                                    <span id="mobile-summary-total-bottles">0</span>
                                     <span class="small text-muted fs-6" style="font-weight: 500;">btls</span>
                                 </span>
                             </div>
@@ -303,7 +280,7 @@
                                 <i class="bi bi-pencil-square text-secondary fs-5"></i>
                             </button>
                             <div class="flex-grow-1">
-                                <button type="submit" class="btn btn-primary w-100 rounded-pill py-2.5 fw-bold shadow-sm" id="mobile-submit-btn" disabled>
+                                <button type="submit" class="btn btn-primary w-100 fw-bold" id="mobile-submit-btn" disabled>
                                     <i class="bi bi-send-fill me-2"></i>Send Request
                                 </button>
                             </div>
@@ -451,7 +428,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     emptyState.className = 'no-results-row';
                     emptyState.innerHTML = `
                         <td colspan="3" class="text-center py-5 text-muted">
-                            <div class="fs-3 mb-2">🔍</div>
+                            <i class="bi bi-search fs-4 mb-2 d-block"></i>
                             <div class="small fw-semibold">No items match your search</div>
                             <div class="text-muted small">Try checking spelling or changing tabs</div>
                         </td>

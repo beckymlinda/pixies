@@ -167,6 +167,8 @@
             </div>
             <form method="POST" action="{{ route('stock.restock') }}">
                 @csrf
+                <input type="hidden" name="filter_bar_id" value="{{ $selectedBarId }}">
+                <input type="hidden" name="filter_search" value="{{ $search }}">
                 <div class="modal-body">
                     <input type="hidden" name="item_id" id="restockItemId">
                     <input type="hidden" name="bar_id" id="restockBarId">
@@ -220,6 +222,8 @@
             </div>
             <form method="POST" action="{{ route('stock.update') }}" id="editStockForm">
                 @csrf
+                <input type="hidden" name="filter_bar_id" value="{{ $selectedBarId }}">
+                <input type="hidden" name="filter_search" value="{{ $search }}">
                 <div class="modal-body">
                     <input type="hidden" name="item_id" id="editItemId">
                     <input type="hidden" name="bar_name" id="editBarName">
@@ -273,6 +277,8 @@
             </div>
             <form method="POST" action="{{ route('stock.add') }}" id="addStockForm">
                 @csrf
+                <input type="hidden" name="filter_bar_id" value="{{ $selectedBarId }}">
+                <input type="hidden" name="filter_search" value="{{ $search }}">
                 <div class="modal-body">
                     <div class="row g-3 mb-3">
                         <div class="col-md-6">
@@ -607,7 +613,12 @@ function refreshEditUnitRows() {
 
 function deleteStock(itemName, barName) {
     if (confirm(`Are you sure you want to delete stock for ${itemName} at ${barName}?`)) {
-        window.location.href = `/stock/delete?item=${encodeURIComponent(itemName)}&bar=${encodeURIComponent(barName)}`;
+        const filterBarId = @json((string) $selectedBarId);
+        const filterSearch = @json((string) $search);
+        let url = `/stock/delete?item=${encodeURIComponent(itemName)}&bar=${encodeURIComponent(barName)}`;
+        if (filterBarId) url += `&filter_bar_id=${encodeURIComponent(filterBarId)}`;
+        if (filterSearch) url += `&filter_search=${encodeURIComponent(filterSearch)}`;
+        window.location.href = url;
     }
 }
 </script>

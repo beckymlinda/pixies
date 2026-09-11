@@ -15,6 +15,18 @@ use Carbon\Carbon;
 class CreditCustomersController extends Controller
 {
     /**
+     * Sellers can view their bar's Ngongole (credit) tabs and totals, but
+     * only managers/directors can create, edit, delete, or record a payment
+     * against one - "clearing off" a Ngongole is a manager/director action.
+     */
+    private function assertCanManageCredit(): void
+    {
+        if (Auth::user()->isSeller()) {
+            abort(403, 'Only managers and directors can manage credit entries.');
+        }
+    }
+
+    /**
      * Display a listing of credit customers.
      */
     public function index(Request $request)
@@ -94,6 +106,8 @@ class CreditCustomersController extends Controller
      */
     public function create()
     {
+        $this->assertCanManageCredit();
+
         $user = Auth::user();
         $bar = $user->bar;
 
@@ -122,6 +136,8 @@ class CreditCustomersController extends Controller
      */
     public function store(Request $request)
     {
+        $this->assertCanManageCredit();
+
         $user = Auth::user();
         $bar = $user->bar;
 
@@ -223,6 +239,8 @@ class CreditCustomersController extends Controller
      */
     public function payment($customerName)
     {
+        $this->assertCanManageCredit();
+
         $user = Auth::user();
         $bar = $user->bar;
 
@@ -257,6 +275,8 @@ class CreditCustomersController extends Controller
      */
     public function recordPayment(Request $request, $customerName)
     {
+        $this->assertCanManageCredit();
+
         $user = Auth::user();
         $bar = $user->bar;
 
@@ -347,9 +367,9 @@ class CreditCustomersController extends Controller
     {
         $user = Auth::user();
         
-        // Authorization: Only creator or manager/director can edit
-        if ($customerTab->created_by !== $user->id && !$user->isManager() && !$user->isDirector()) {
-            abort(403, 'You can only edit your own entries.');
+        // Authorization: Only managers/directors can clear off or edit a Ngongole
+        if (!$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Only managers and directors can edit credit entries.');
         }
 
         return view('credit-customers.edit', compact('customerTab'));
@@ -362,9 +382,9 @@ class CreditCustomersController extends Controller
     {
         $user = Auth::user();
         
-        // Authorization: Only creator or manager/director can edit
-        if ($customerTab->created_by !== $user->id && !$user->isManager() && !$user->isDirector()) {
-            abort(403, 'You can only edit your own entries.');
+        // Authorization: Only managers/directors can clear off or edit a Ngongole
+        if (!$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Only managers and directors can edit credit entries.');
         }
 
         $validated = $request->validate([
@@ -404,9 +424,9 @@ class CreditCustomersController extends Controller
     {
         $user = Auth::user();
         
-        // Authorization: Only creator or manager/director can delete
-        if ($customerTab->created_by !== $user->id && !$user->isManager() && !$user->isDirector()) {
-            abort(403, 'You can only delete your own entries.');
+        // Authorization: Only managers/directors can delete a credit entry
+        if (!$user->isManager() && !$user->isDirector()) {
+            abort(403, 'Only managers and directors can delete credit entries.');
         }
 
         try {

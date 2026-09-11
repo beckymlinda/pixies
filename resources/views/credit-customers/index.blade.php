@@ -6,9 +6,6 @@
     .credit-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
         padding: 1.5rem 2rem;
         margin-bottom: 2rem;
     }
@@ -69,13 +66,21 @@
     <!-- Modern Header -->
     <div class="credit-header d-flex align-items-center justify-content-between shadow-sm">
         <div>
-            <h1 class="h3 fw-bold mb-1 text-dark">Credit Accounts</h1>
-            <p class="text-muted small mb-0">Manage customer debts, payments, and outstanding balances.</p>
+            <h1 class="h3 fw-bold mb-1 text-dark">{{ auth()->user()->isSeller() ? 'Ngongole' : 'Credit Accounts' }}</h1>
+            <p class="text-muted small mb-0">
+                @if(auth()->user()->isSeller())
+                    Customers who owe your bar money on credit.
+                @else
+                    Manage customer debts, payments, and outstanding balances.
+                @endif
+            </p>
         </div>
         <div class="d-flex gap-2">
-            <a href="{{ route('credit-customers.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                <i class="bi bi-plus-lg me-2"></i>New Entry
-            </a>
+            @unless(auth()->user()->isSeller())
+                <a href="{{ route('credit-customers.create') }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                    <i class="bi bi-plus-lg me-2"></i>New Entry
+                </a>
+            @endunless
             <a href="{{ route('credit-customers.export', request()->only(['search', 'filter'])) }}" class="btn btn-light border rounded-pill px-4 shadow-sm bg-white">
                 <i class="bi bi-download me-2"></i>Export CSV
             </a>
@@ -201,7 +206,7 @@
                                         <a href="{{ route('credit-customers.show', $customer->customer_name) }}" class="btn-action shadow-sm" title="View History">
                                             <i class="bi bi-eye-fill"></i>
                                         </a>
-                                        @if($customer->total_balance > 0)
+                                        @if($customer->total_balance > 0 && !auth()->user()->isSeller())
                                             <a href="{{ route('credit-customers.payment', $customer->customer_name) }}" class="btn btn-sm btn-success rounded-pill px-3 py-1 shadow-sm" style="font-size: 0.75rem;">
                                                 <i class="bi bi-cash me-1"></i>Pay
                                             </a>

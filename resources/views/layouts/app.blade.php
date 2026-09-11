@@ -218,6 +218,9 @@
                     <a href="{{ route('reporting.index') }}" class="sidebar-nav-link {{ request()->routeIs('reporting.*') ? 'active' : '' }}">
                         <i class="bi bi-clipboard-check"></i> Balance
                     </a>
+                    <a href="{{ route('credit-customers.index') }}" class="sidebar-nav-link {{ request()->routeIs('credit-customers.*') ? 'active' : '' }}">
+                        <i class="bi bi-person-lines-fill"></i> Ngongole
+                    </a>
                     <a href="{{ route('damaged-goods.index') }}" class="sidebar-nav-link {{ request()->routeIs('damaged-goods.*') ? 'active' : '' }}">
                         <i class="bi bi-bandaid"></i> Damaged Goods
                     </a>

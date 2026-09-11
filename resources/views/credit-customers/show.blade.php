@@ -6,9 +6,6 @@
     .credit-show-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
         padding: 1.5rem 2rem;
         margin-bottom: 2rem;
     }
@@ -69,14 +66,16 @@
             </div>
         </div>
         <div class="d-flex gap-2">
-            @if($customer->total_balance > 0)
-                <a href="{{ route('credit-customers.payment', $customer->name) }}" class="btn btn-success rounded-pill px-4 shadow-sm">
-                    <i class="bi bi-cash me-2"></i>Record Payment
+            @unless(auth()->user()->isSeller())
+                @if($customer->total_balance > 0)
+                    <a href="{{ route('credit-customers.payment', $customer->name) }}" class="btn btn-success rounded-pill px-4 shadow-sm">
+                        <i class="bi bi-cash me-2"></i>Record Payment
+                    </a>
+                @endif
+                <a href="{{ route('credit-customers.create') }}?customer={{ urlencode($customer->name) }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
+                    <i class="bi bi-plus-lg me-2"></i>New Entry
                 </a>
-            @endif
-            <a href="{{ route('credit-customers.create') }}?customer={{ urlencode($customer->name) }}" class="btn btn-primary rounded-pill px-4 shadow-sm">
-                <i class="bi bi-plus-lg me-2"></i>New Entry
-            </a>
+            @endunless
         </div>
     </div>
 
@@ -124,7 +123,9 @@
                             <th class="text-end">Row Balance</th>
                             <th class="text-center">Status</th>
                             <th>Description</th>
-                            <th class="text-end">Actions</th>
+                            @unless(auth()->user()->isSeller())
+                                <th class="text-end">Actions</th>
+                            @endunless
                         </tr>
                     </thead>
                     <tbody>
@@ -151,19 +152,21 @@
                                 <td data-label="Note">
                                     <div class="text-muted small">{{ $tab->description ?: '—' }}</div>
                                 </td>
-                                <td data-label="Actions" class="text-end">
-                                    <div class="d-flex justify-content-end gap-1">
-                                        <a href="{{ route('credit-customers.edit', $tab) }}" class="btn-action shadow-sm" title="Edit">
-                                            <i class="bi bi-pencil-fill"></i>
-                                        </a>
-                                        <form action="{{ route('credit-customers.destroy', $tab) }}" method="POST" class="d-inline" onsubmit="return confirm('Delete this record?')">
-                                            @csrf @method('DELETE')
-                                            <button type="submit" class="btn-action text-danger shadow-sm" title="Delete">
-                                                <i class="bi bi-trash-fill"></i>
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
+                                @unless(auth()->user()->isSeller())
+                                    <td data-label="Actions" class="text-end">
+                                        <div class="d-flex justify-content-end gap-1">
+                                            <a href="{{ route('credit-customers.edit', $tab) }}" class="btn-action shadow-sm" title="Edit">
+                                                <i class="bi bi-pencil-fill"></i>
+                                            </a>
+                                            <form action="{{ route('credit-customers.destroy', $tab) }}" method="POST" class="d-inline" onsubmit="return confirm('Delete this record?')">
+                                                @csrf @method('DELETE')
+                                                <button type="submit" class="btn-action text-danger shadow-sm" title="Delete">
+                                                    <i class="bi bi-trash-fill"></i>
+                                                </button>
+                                            </form>
+                                        </div>
+                                    </td>
+                                @endunless
                             </tr>
                         @empty
                             <tr>
