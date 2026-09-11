@@ -1989,7 +1989,8 @@ private function upgradeLegacyShotStockFigures(
         }
 
         $request->validate([
-            'item_name' => 'required|string',
+            'item_id' => 'nullable|integer|exists:items,id',
+            'item_name' => 'required|string|max:255',
             'bar_name' => 'required|string',
             'new_stock' => 'required|integer|min:0',
             'category' => 'nullable|string|max:255',
@@ -2003,19 +2004,37 @@ private function upgradeLegacyShotStockFigures(
 
         DB::beginTransaction();
         try {
-            $itemName = $request->input('item_name');
+            $itemId = $request->input('item_id');
+            $itemName = trim($request->input('item_name'));
             $barName = $request->input('bar_name');
             $newStock = (int) $request->input('new_stock');
             $category = $request->input('category');
             $units = $request->input('units');
 
-            // Find the item and bar
-            $item = Item::where('name', $itemName)->first();
+            // Prefer looking the item up by ID - the name field is editable
+            // now (renaming the item), so it can no longer be trusted as the
+            // lookup key.
+            $item = $itemId ? Item::find($itemId) : Item::where('name', $itemName)->first();
             $bar = Bar::where('name', $barName)->first();
 
             if (!$item || !$bar) {
                 return back()->with('error', 'Item or bar not found');
             }
+
+            // Guard against renaming into an existing different item's name -
+            // "name" is used as a lookup key elsewhere (Add Stock, warehouse
+            // transfers), so two items sharing a name would make those
+            // lookups pick whichever one happens to come back first.
+            if ($itemName !== '' && strcasecmp($itemName, $item->name) !== 0) {
+                $duplicate = Item::where('id', '!=', $item->id)
+                    ->whereRaw('LOWER(name) = ?', [strtolower($itemName)])
+                    ->exists();
+                if ($duplicate) {
+                    return back()->with('error', "Another item is already named \"{$itemName}\". Choose a different name.");
+                }
+            }
+
+            $oldName = $item->name;
 
             // Identify the base unit (first row, or the one flagged is_base=1)
             $baseUnitIndex = 0;
@@ -2035,6 +2054,9 @@ private function upgradeLegacyShotStockFigures(
             // Update item master data
             $item->director_stock = $newStock;
             $item->price = $baseSellingPrice;
+            if ($itemName !== '') {
+                $item->name = $itemName;
+            }
             if (!empty($category)) {
                 $item->category = $category;
             }
@@ -2155,8 +2177,11 @@ private function upgradeLegacyShotStockFigures(
                 ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
                 ->delete();
 
-            // Sync with warehouse - delete warehouse unit bar prices so BarItemPrice takes priority
-            $warehouseStock = WarehouseStock::where('item_name', $itemName)
+            // Sync with warehouse - looked up by the OLD name (that's what's
+            // still stored there), then renamed to match if the item was
+            // renamed - delete warehouse unit bar prices so BarItemPrice
+            // takes priority.
+            $warehouseStock = WarehouseStock::where('item_name', $oldName)
                 ->with(['units.barPrices'])
                 ->first();
 
@@ -2164,6 +2189,9 @@ private function upgradeLegacyShotStockFigures(
                 $warehouseStock->selling_price = $baseSellingPrice;
                 if ($basePurchasePrice > 0) {
                     $warehouseStock->purchase_price = $basePurchasePrice;
+                }
+                if ($itemName !== '' && $itemName !== $oldName) {
+                    $warehouseStock->item_name = $itemName;
                 }
                 $warehouseStock->save();
 
@@ -2180,13 +2208,15 @@ private function upgradeLegacyShotStockFigures(
 
             // Log the activity
             $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
+            $renamed = $oldName !== $item->name;
+            $renameNote = $renamed ? " Renamed from \"{$oldName}\" to \"{$item->name}\"." : '';
             ActivityLog::log([
                 'action' => 'stock_updated',
-                'description' => "Updated stock for {$item->name} at {$bar->name} from {$oldStock} to {$newStock} and price from {$oldPrice} to {$baseSellingPrice}. Units: {$unitSummary}",
+                'description' => "Updated stock for {$item->name} at {$bar->name} from {$oldStock} to {$newStock} and price from {$oldPrice} to {$baseSellingPrice}.{$renameNote} Units: {$unitSummary}",
                 'subject_type' => Item::class,
                 'subject_id' => $item->id,
-                'old_values' => ['stock' => $oldStock, 'bar' => $bar->name, 'price' => $oldPrice],
-                'new_values' => ['stock' => $newStock, 'bar' => $bar->name, 'price' => $baseSellingPrice, 'units' => $units],
+                'old_values' => ['stock' => $oldStock, 'bar' => $bar->name, 'price' => $oldPrice, 'name' => $oldName],
+                'new_values' => ['stock' => $newStock, 'bar' => $bar->name, 'price' => $baseSellingPrice, 'name' => $item->name, 'units' => $units],
             ]);
 
             DB::commit();

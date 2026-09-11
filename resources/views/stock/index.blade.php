@@ -221,11 +221,11 @@
             <form method="POST" action="{{ route('stock.update') }}" id="editStockForm">
                 @csrf
                 <div class="modal-body">
-                    <input type="hidden" name="item_name" id="editItemName">
+                    <input type="hidden" name="item_id" id="editItemId">
                     <input type="hidden" name="bar_name" id="editBarName">
                     <div class="mb-3">
-                        <label class="form-label small text-muted text-uppercase fw-bold mb-1">Item</label>
-                        <input type="text" class="form-control bg-light fw-bold" id="editItemDisplay" readonly>
+                        <label class="form-label fw-bold">Item Name</label>
+                        <input type="text" name="item_name" class="form-control fw-bold" id="editItemDisplay" required>
                     </div>
                     <div class="mb-3">
                         <label class="form-label small text-muted text-uppercase fw-bold mb-1">Bar</label>
@@ -507,7 +507,7 @@ function editStock(itemId, itemName, barName, currentStock) {
     const category = data.category || '';
     let productUnits = data.product_units || [];
 
-    document.getElementById('editItemName').value = itemName;
+    document.getElementById('editItemId').value = itemId;
     document.getElementById('editBarName').value = barName;
     document.getElementById('editItemDisplay').value = itemName;
     document.getElementById('editBarDisplay').value = barName;
