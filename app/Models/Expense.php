@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 class Expense extends Model
 {
     public const SHIFT_DEBT_PREFIX = '[shift]';
+    public const SHIFT_DAMAGE_PREFIX = '[damage]';
 
     public static function expenditureTypes(): array
     {
@@ -44,11 +45,16 @@ class Expense extends Model
         return self::expenditureTypes()[$type] ?? ucfirst($type);
     }
 
-    protected $fillable = ['stock_entry_id', 'type', 'amount', 'description', 'date', 'user_id', 'bar_id', 'is_overhead'];
+    protected $fillable = ['stock_entry_id', 'type', 'item_id', 'quantity', 'amount', 'description', 'date', 'user_id', 'bar_id', 'is_overhead'];
 
     public function bar()
     {
         return $this->belongsTo(Bar::class);
+    }
+
+    public function item()
+    {
+        return $this->belongsTo(Item::class);
     }
 
     public function stockEntry()

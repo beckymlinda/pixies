@@ -81,6 +81,14 @@
                             <div class="metric-box border-danger border-opacity-25">
                                 <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Expenses</div>
                                 <div class="h5 mb-0 fw-bold text-danger">{{ number_format($totalExpenses) }}</div>
+                                @if(($damagesTotal ?? 0) > 0)
+                                    <div class="small text-danger mt-1" style="font-size: 0.7rem;">
+                                        <i class="bi bi-exclamation-triangle-fill me-1"></i>Damages: {{ number_format($damagesTotal) }}
+                                        @if(!empty($damagesBreakdown))
+                                            <span class="text-muted">({{ $damagesBreakdown }})</span>
+                                        @endif
+                                    </div>
+                                @endif
                             </div>
                         </div>
                         <div class="col-md-6 col-lg-3">

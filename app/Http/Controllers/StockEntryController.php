@@ -87,45 +87,67 @@ class StockEntryController extends Controller
                 ->with('error', 'You must be assigned to a bar to create a stock sheet.');
         }
 
-        // If there is an active pending sheet, continue it unless a new stock sheet is requested.
-        $pendingEntry = Sale::where('bar_id', $user->bar_id)
-            ->where('status', 'pending')
-            ->orderBy('date', 'desc')
-            ->orderBy('id', 'desc')
-            ->first();
-
+        // Sellers sell today and record it the next morning, so "today" would
+        // show an empty sheet. Default to yesterday (the just-finished shift),
+        // matching the Balance date picker - the seller can still change it.
         $today = now()->format('Y-m-d');
-        $todayEntry = Sale::where('date', $today)
+        $requestedDate = $request->query('date');
+        $datePicked = $requestedDate !== null;
+
+        if ($datePicked && preg_match('/^\d{4}-\d{2}-\d{2}$/', $requestedDate) && strtotime($requestedDate)) {
+            $date = $requestedDate;
+        } else {
+            $date = now()->subDay()->format('Y-m-d');
+        }
+
+        // Never allow a sheet dated in the future.
+        if ($date > $today) {
+            $date = $today;
+        }
+
+        // If the seller hasn't explicitly picked a date, keep the original
+        // safety net: silently continue an unfinished pending sheet instead
+        // of letting them start a duplicate one by mistake.
+        if (!$datePicked) {
+            $pendingEntry = Sale::where('bar_id', $user->bar_id)
+                ->where('status', 'pending')
+                ->orderBy('date', 'desc')
+                ->orderBy('id', 'desc')
+                ->first();
+
+            if (! $request->query('new_sheet') && $pendingEntry) {
+                return redirect()->route('stock-entries.edit', $pendingEntry);
+            }
+        }
+
+        // A sheet for the chosen date may already exist (today's, or an
+        // earlier date the seller picked) - continue that instead of
+        // starting a second one for the same day.
+        $existingEntry = Sale::where('date', $date)
             ->where('bar_id', $user->bar_id)
             ->first();
 
-        if (! $request->query('new_sheet') && $pendingEntry) {
-            return redirect()->route('stock-entries.edit', $pendingEntry);
-        }
-
-        if ($todayEntry) {
-            return redirect()->route('stock-entries.edit', $todayEntry)
-                ->with('info', 'Today\'s stock sheet already exists. Continue the current sheet or verify it before creating another.');
+        if ($existingEntry) {
+            return redirect()->route('stock-entries.edit', $existingEntry)
+                ->with('info', $date === $today
+                    ? 'Today\'s stock sheet already exists. Continue the current sheet or verify it before creating another.'
+                    : 'A stock sheet for ' . \Carbon\Carbon::parse($date)->format('M d, Y') . ' already exists. Continue that sheet instead.');
         }
 
         // Get all items with their units in database insertion order
         $items = Item::with('productUnits')->where('is_hidden', false)->orderBy('id')->get();
-        
+
         // Get approved order requests sum for this bar and date
-        $today = now()->format('Y-m-d');
-        $todayApprovedOrders = $this->getApprovedOrderQuantities($user->bar_id, $today);
-        $pendingOrderItemIds = $this->getPendingOrderItemIds($user->bar_id, $today);
+        $todayApprovedOrders = $this->getApprovedOrderQuantities($user->bar_id, $date);
+        $pendingOrderItemIds = $this->getPendingOrderItemIds($user->bar_id, $date);
 
-        $previousClosingStock = $this->getLatestClosingStockForBar($user->bar_id);
+        // Closing stock carried forward from entries strictly before the
+        // chosen date - not just "the latest ever", since the seller may be
+        // backfilling an earlier date while later sheets already exist.
+        $previousClosingStock = $this->getPreviousClosingStockForBar($user->bar_id, $date);
 
-        $todayEntry = Sale::where('date', $today)
-            ->where('bar_id', $user->bar_id)
-            ->with('stockEntryItems')
-            ->first();
-        $todayStockItems = $todayEntry
-            ? $todayEntry->stockEntryItems->keyBy('item_id')
-            : collect();
-        
+        $todayStockItems = collect();
+
         // Prepare items data with latest stock and units
         $itemsData = $items->map(function($item) use ($user, $todayApprovedOrders, $previousClosingStock, $todayStockItems, $pendingOrderItemIds) {
             // Get bar-specific price
@@ -174,15 +196,9 @@ class StockEntryController extends Controller
         
         $bar = $user->bar;
 
-        $currentPage = max(1, (int) request()->query('page', 1));
-        $perPage = 10;
-        $totalItems = $itemsData->count();
-        $totalPages = max(1, (int) ceil($totalItems / $perPage));
-        $currentPage = min($currentPage, $totalPages);
+        $paginatedItems = $itemsData->values();
 
-        $paginatedItems = $itemsData->slice(($currentPage - 1) * $perPage, $perPage)->values();
-
-        return view('stock-entries.create', compact('paginatedItems', 'bar', 'items', 'currentPage', 'totalPages', 'perPage'));
+        return view('stock-entries.create', compact('paginatedItems', 'bar', 'date'));
     }
 
     public function store(Request $request)
@@ -191,15 +207,15 @@ class StockEntryController extends Controller
         
         // Validation rules for all items approach
         $validated = $request->validate([
-            'date' => 'required|date',
+            'date' => 'required|date|before_or_equal:today',
             'items' => 'required|array',
             'items.*.item_id' => 'required|exists:items,id',
             'items.*.price' => 'required|numeric|min:0',
             'items.*.opening_stock' => 'required|numeric|min:0',
-            'items.*.orders' => 'sometimes|numeric|min:0',
-            'items.*.sales' => 'sometimes|numeric|min:0',
-            'items.*.closing_stock' => 'sometimes|numeric|min:0',
-            'items.*.sales_amount' => 'sometimes|numeric|min:0',
+            'items.*.orders' => 'nullable|numeric|min:0',
+            'items.*.sales' => 'nullable|numeric|min:0',
+            'items.*.closing_stock' => 'nullable|numeric|min:0',
+            'items.*.sales_amount' => 'nullable|numeric|min:0',
             'items.*.unit_name' => 'sometimes|string|nullable', // For multi-unit support
         ], [
             'items.required' => 'Stock items data is required',
@@ -488,9 +504,11 @@ class StockEntryController extends Controller
     public function edit(Sale $stockEntry)
     {
         $user = Auth::user();
-        
-        // Sellers can edit only today's entry for their own bar.
-        if ($user->isSeller() && ($stockEntry->bar_id !== $user->bar_id || $stockEntry->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
+
+        // Sellers can edit their own bar's sheets for today or any past date
+        // (they may be backfilling a day they picked via the date selector),
+        // but never a future-dated one.
+        if ($user->isSeller() && ($stockEntry->bar_id !== $user->bar_id || $stockEntry->date->format('Y-m-d') > now()->format('Y-m-d'))) {
             abort(403);
         }
 
@@ -570,9 +588,11 @@ class StockEntryController extends Controller
     public function update(Request $request, Sale $stockEntry)
     {
         $user = Auth::user();
-        
-        // Sellers can edit only today's entry for their own bar.
-        if ($user->isSeller() && ($stockEntry->bar_id !== $user->bar_id || $stockEntry->date->format('Y-m-d') !== now()->format('Y-m-d'))) {
+
+        // Sellers can update their own bar's sheets for today or any past
+        // date (they may be backfilling a day they picked via the date
+        // selector), but never a future-dated one.
+        if ($user->isSeller() && ($stockEntry->bar_id !== $user->bar_id || $stockEntry->date->format('Y-m-d') > now()->format('Y-m-d'))) {
             abort(403);
         }
 

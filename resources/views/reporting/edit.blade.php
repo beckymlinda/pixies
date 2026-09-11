@@ -147,7 +147,7 @@
                 <div class="card-header bg-white py-3 border-bottom d-flex justify-content-between align-items-center">
                     <div>
                         <h5 class="fw-bold mb-0 text-dark">Expenditure</h5>
-                        <p class="small text-muted mb-0">Operational costs reduce bankable cash. Ngongole becomes credit sales.</p>
+                        <p class="small text-muted mb-0">Operational costs reduce bankable cash. Ngongole and Damages are recorded as tabs, not cash expenses.</p>
                     </div>
                     <button type="button" class="btn btn-sm btn-outline-primary rounded-pill px-3" onclick="addExpenditureRow()">
                         <i class="bi bi-plus-lg me-1"></i>Add Line
@@ -175,6 +175,19 @@
                                         <label class="small fw-bold text-secondary mb-1">Notes</label>
                                         <input type="text" name="expenditures[{{ $index }}][notes]" class="form-control form-control-modern expenditure-notes"
                                                value="{{ $exp['notes'] ?? '' }}" placeholder="What was damaged?">
+                                    </div>
+                                    <div class="col-md-7 damage-item-wrap {{ ($exp['type'] ?? '') === 'damages' ? '' : 'd-none' }}">
+                                        <label class="small fw-bold text-secondary mb-1">Item Damaged</label>
+                                        <select name="expenditures[{{ $index }}][item_id]" class="form-select form-control-modern expenditure-item-select">
+                                            <option value="">Select item...</option>
+                                            @foreach($damageItems as $di)
+                                                <option value="{{ $di['id'] }}" data-price="{{ $di['price'] }}" {{ (string) ($exp['item_id'] ?? '') === (string) $di['id'] ? 'selected' : '' }}>{{ $di['name'] }}</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                    <div class="col-md-5 damage-item-wrap {{ ($exp['type'] ?? '') === 'damages' ? '' : 'd-none' }}">
+                                        <label class="small fw-bold text-secondary mb-1">Quantity Damaged (base unit)</label>
+                                        <input type="number" name="expenditures[{{ $index }}][quantity]" class="form-control form-control-modern expenditure-quantity" value="{{ $exp['quantity'] ?? '' }}" min="0" step="1" placeholder="e.g. 1">
                                     </div>
                                     <div class="col-md-12 damage-photo-wrap {{ ($exp['type'] ?? '') === 'damages' ? '' : 'd-none' }}">
                                         <label class="small fw-bold text-secondary mb-1">Photo of Damaged Goods</label>
@@ -253,6 +266,7 @@ const totalSales = parseFloat('{{ $totalSales }}') || 0;
 const existingCredit = parseFloat('{{ $baseCreditSales ?? $creditSales ?? 0 }}') || 0;
 const expenditureTypes = @json($expenditureTypes);
 const paymentMethods = @json($paymentMethods);
+const damageItems = @json($damageItems);
 
 function addExpenditureRow() {
     const hint = document.getElementById('noExpenditureHint');
@@ -260,6 +274,7 @@ function addExpenditureRow() {
     const container = document.getElementById('expendituresContainer');
     const idx = expenditureRowIndex++;
     const options = Object.entries(expenditureTypes).map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    const itemOptions = '<option value="">Select item...</option>' + damageItems.map(di => `<option value="${di.id}" data-price="${di.price}">${di.name}</option>`).join('');
     const div = document.createElement('div');
     div.className = 'payment-row-modern expenditure-row';
     div.innerHTML = `
@@ -276,6 +291,14 @@ function addExpenditureRow() {
                 <label class="small fw-bold text-secondary mb-1">Notes</label>
                 <input type="text" name="expenditures[${idx}][notes]" class="form-control form-control-modern expenditure-notes" placeholder="Details or customer name">
             </div>
+            <div class="col-md-7 damage-item-wrap d-none">
+                <label class="small fw-bold text-secondary mb-1">Item Damaged</label>
+                <select name="expenditures[${idx}][item_id]" class="form-select form-control-modern expenditure-item-select">${itemOptions}</select>
+            </div>
+            <div class="col-md-5 damage-item-wrap d-none">
+                <label class="small fw-bold text-secondary mb-1">Quantity Damaged (base unit)</label>
+                <input type="number" name="expenditures[${idx}][quantity]" class="form-control form-control-modern expenditure-quantity" min="0" step="1" placeholder="e.g. 1">
+            </div>
             <div class="col-md-12 damage-photo-wrap d-none">
                 <label class="small fw-bold text-secondary mb-1">Photo of Damaged Goods</label>
                 <input type="file" name="expenditures[${idx}][photo]" class="form-control form-control-modern damage-photo-input" accept="image/*">
@@ -286,16 +309,29 @@ function addExpenditureRow() {
         </div>`;
     container.insertBefore(div, container.firstChild);
     attachListeners();
-    toggleDamagePhoto(div);
+    toggleDamageFields(div);
     div.querySelector('.expenditure-amount')?.focus();
 }
 
-function toggleDamagePhoto(row) {
+function toggleDamageFields(row) {
     const type = row.querySelector('.expenditure-type')?.value;
     const wrap = row.querySelector('.damage-photo-wrap');
     const input = row.querySelector('.damage-photo-input');
+    const itemWraps = row.querySelectorAll('.damage-item-wrap');
+    const itemSelect = row.querySelector('.expenditure-item-select');
+    const qtyInput = row.querySelector('.expenditure-quantity');
+    const isDamages = type === 'damages';
+
+    itemWraps.forEach(w => w.classList.toggle('d-none', !isDamages));
+    if (itemSelect) itemSelect.required = isDamages;
+    if (qtyInput) qtyInput.required = isDamages;
+    if (!isDamages) {
+        if (itemSelect) itemSelect.value = '';
+        if (qtyInput) qtyInput.value = '';
+    }
+
     if (!wrap) return;
-    if (type === 'damages') {
+    if (isDamages) {
         wrap.classList.remove('d-none');
         if (input) input.required = true;
     } else {
@@ -304,6 +340,19 @@ function toggleDamagePhoto(row) {
             input.required = false;
             input.value = '';
         }
+    }
+}
+
+function updateDamageAmount(row) {
+    const itemSelect = row.querySelector('.expenditure-item-select');
+    const qtyInput = row.querySelector('.expenditure-quantity');
+    const amountInput = row.querySelector('.expenditure-amount');
+    if (!itemSelect || !qtyInput || !amountInput) return;
+
+    const price = parseFloat(itemSelect.options[itemSelect.selectedIndex]?.dataset.price) || 0;
+    const qty = parseFloat(qtyInput.value) || 0;
+    if (price > 0 && qty > 0) {
+        amountInput.value = (price * qty).toFixed(2);
     }
 }
 
@@ -435,6 +484,12 @@ function attachListeners() {
         select.removeEventListener('change', onExpenditureTypeChange);
         select.addEventListener('change', onExpenditureTypeChange);
     });
+    document.querySelectorAll('.expenditure-item-select, .expenditure-quantity').forEach(input => {
+        input.removeEventListener('change', onDamageItemChange);
+        input.removeEventListener('input', onDamageItemChange);
+        input.addEventListener('change', onDamageItemChange);
+        input.addEventListener('input', onDamageItemChange);
+    });
     document.querySelectorAll('.payment-method').forEach(select => {
         select.removeEventListener('change', onPaymentMethodChange);
         select.addEventListener('change', onPaymentMethodChange);
@@ -443,13 +498,18 @@ function attachListeners() {
 
 function onExpenditureTypeChange(e) {
     const row = e.target.closest('.expenditure-row');
-    if (row) toggleDamagePhoto(row);
+    if (row) toggleDamageFields(row);
+}
+
+function onDamageItemChange(e) {
+    const row = e.target.closest('.expenditure-row');
+    if (row) updateDamageAmount(row);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     attachListeners();
     document.querySelectorAll('#paymentsContainer .payment-row-modern').forEach(updatePaymentRowHints);
-    document.querySelectorAll('.expenditure-row').forEach(toggleDamagePhoto);
+    document.querySelectorAll('.expenditure-row').forEach(toggleDamageFields);
     updateCalculations();
 });
 </script>

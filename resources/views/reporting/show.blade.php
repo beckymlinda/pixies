@@ -150,21 +150,32 @@
                                 <tr>
                                     <td colspan="4" class="pt-3 pb-1 border-0">
                                         <span class="small fw-bold text-danger text-uppercase"><i class="bi bi-arrow-up-circle-fill me-1"></i>Shift Expenditures</span>
+                                        <div class="small text-muted fst-italic mt-1" style="font-size: 0.7rem;">
+                                            Lunch, Transport &amp; Damages are shown for reference only (cash already taken from Collected, or stock that was never sold) — they are not added to the Grand Total below. Only Ngongole (credit sales) counts toward it.
+                                        </div>
                                     </td>
                                 </tr>
                                 <tr>
                                     <td>
                                         <span class="badge bg-warning bg-opacity-25 text-dark border border-warning"><i class="bi bi-cup-hot-fill me-1"></i>Lunch</span>
                                     </td>
-                                    <td class="text-muted small">—</td>
+                                    <td class="text-muted small">{{ $lunchBreakdown ?: '—' }}</td>
                                     <td class="text-end fw-bold">{{ number_format($lunchTotal, 0) }}</td>
+                                    <td class="text-end text-muted">—</td>
+                                </tr>
+                                <tr>
+                                    <td>
+                                        <span class="badge bg-info bg-opacity-10 text-info border border-info border-opacity-25"><i class="bi bi-truck me-1"></i>Transport</span>
+                                    </td>
+                                    <td class="text-muted small">{{ $transportBreakdown ?: '—' }}</td>
+                                    <td class="text-end fw-bold">{{ number_format($transportTotal, 0) }}</td>
                                     <td class="text-end text-muted">—</td>
                                 </tr>
                                 <tr>
                                     <td>
                                         <span class="badge bg-secondary bg-opacity-10 text-secondary border border-secondary border-opacity-25"><i class="bi bi-people-fill me-1"></i>Ngongole</span>
                                     </td>
-                                    <td class="text-muted small">—</td>
+                                    <td class="text-muted small">{{ $ngongoleBreakdown ?: '—' }}</td>
                                     <td class="text-end fw-bold">{{ number_format($ngongoleTotal, 0) }}</td>
                                     <td class="text-end text-muted">—</td>
                                 </tr>
@@ -172,7 +183,7 @@
                                     <td>
                                         <span class="badge bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25"><i class="bi bi-exclamation-triangle-fill me-1"></i>Damages</span>
                                     </td>
-                                    <td class="text-muted small">—</td>
+                                    <td class="text-muted small">{{ $damagesBreakdown ?: '—' }}</td>
                                     <td class="text-end fw-bold">{{ number_format($damagesTotal, 0) }}</td>
                                     <td class="text-end text-muted">—</td>
                                 </tr>
@@ -182,8 +193,19 @@
                                     <td colspan="4" class="pt-2 border-0"></td>
                                 </tr>
                                 <tr class="fw-bold" style="background-color: var(--pixies-text); color: #fff;">
-                                    <td class="rounded-start py-3">Grand Total</td>
-                                    <td></td>
+                                    <td class="rounded-start py-3">
+                                        Grand Total
+                                        <div class="fw-normal text-white-50" style="font-size: 0.65rem;">Collected + Ngongole — should equal Total Sales</div>
+                                    </td>
+                                    <td class="align-middle">
+                                        @if(abs($grandTotalVariance) < 0.01)
+                                            <span class="badge bg-success bg-opacity-25 text-white border border-success"><i class="bi bi-check-circle-fill me-1"></i>Matches Total Sales</span>
+                                        @else
+                                            <span class="badge bg-warning bg-opacity-25 text-white border border-warning">
+                                                <i class="bi bi-exclamation-triangle-fill me-1"></i>{{ $grandTotalVariance > 0 ? 'Over' : 'Under' }} by {{ number_format(abs($grandTotalVariance), 0) }}
+                                            </span>
+                                        @endif
+                                    </td>
                                     <td class="text-end py-3">{{ number_format($grandTotal, 0) }}</td>
                                     <td class="text-end rounded-end py-3">—</td>
                                 </tr>

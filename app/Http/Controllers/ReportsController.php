@@ -9,6 +9,7 @@ use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\Bar;
 use App\Models\Item;
+use App\Models\BarItemPrice;
 use App\Models\CustomerTab;
 use App\Models\DamagedGood;
 use App\Models\Debt;
@@ -615,6 +616,7 @@ class ReportsController extends Controller
         $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
         $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
         $balancePayments = $existingReport ? $this->balancePaymentsForForm($existingReport) : [];
+        $damageItems = $this->getDamageItemsForBar($user->bar_id);
 
         return view('reporting.create', compact(
             'date',
@@ -628,7 +630,8 @@ class ReportsController extends Controller
             'paymentMethods',
             'expenditureTypes',
             'shiftExpenditures',
-            'balancePayments'
+            'balancePayments',
+            'damageItems'
         ));
     }
 
@@ -659,6 +662,8 @@ class ReportsController extends Controller
             'expenditures.*.amount' => 'nullable|numeric|min:0',
             'expenditures.*.notes' => 'nullable|string|max:500',
             'expenditures.*.photo' => 'nullable|image|max:5120',
+            'expenditures.*.item_id' => 'nullable|integer|exists:items,id',
+            'expenditures.*.quantity' => 'nullable|numeric|min:0',
             'notes' => 'nullable|string|max:1000',
         ]);
 
@@ -807,14 +812,52 @@ class ReportsController extends Controller
         // EXPENSES (operational only â€” debt is tracked as credit sales)
         $totalExpenses = $expenses->sum('amount');
 
-        // Shift expenditure totals shown in the Payment Breakdown table
+        // Shift expenditure totals + details shown in the Payment Breakdown table
         $lunchTotal = (float) $expenses->where('type', 'lunch')->sum('amount');
-        $damagesTotal = (float) $expenses->where('type', 'damages')->sum('amount');
-        $ngongoleTotal = (float) CustomerTab::where('bar_id', $dailyReport->bar_id)
+        $lunchBreakdown = $expenses->where('type', 'lunch')
+            ->pluck('description')
+            ->filter()
+            ->implode(', ');
+
+        $transportTotal = (float) $expenses->where('type', 'taxi')->sum('amount');
+        $transportBreakdown = $expenses->where('type', 'taxi')
+            ->pluck('description')
+            ->filter()
+            ->implode(', ');
+
+        // Damages are recorded as a DamagedGood + tab, not an Expense (see
+        // syncShiftExpenditures), so they're never part of $totalExpenses.
+        $damageEntries = DamagedGood::where('bar_id', $dailyReport->bar_id)
+            ->where('date', $dailyReport->date)
+            ->where('from_balance', true)
+            ->get();
+        $damagesTotal = (float) $damageEntries->sum('amount');
+        $damagesBreakdown = $damageEntries
+            ->filter(fn ($e) => $e->item_id && (float) $e->quantity > 0)
+            ->map(function ($e) {
+                $name = $e->item?->name ?? 'Item';
+                $qty = rtrim(rtrim(number_format((float) $e->quantity, 2), '0'), '.');
+                return "{$name} x{$qty}";
+            })
+            ->implode(', ');
+
+        $ngongoleEntries = CustomerTab::where('bar_id', $dailyReport->bar_id)
             ->where('date', $dailyReport->date)
             ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
-            ->sum('amount');
-        $grandTotal = $totalCollected + $lunchTotal + $damagesTotal + $ngongoleTotal;
+            ->get();
+        $ngongoleTotal = (float) $ngongoleEntries->sum('amount');
+        $ngongoleBreakdown = $ngongoleEntries
+            ->map(fn ($tab) => $tab->customer_name . ' (' . number_format((float) $tab->amount, 0) . ')')
+            ->implode(', ');
+
+        // Grand Total reconciles against Total Sales: money actually collected,
+        // plus what was sold on credit (Ngongole) but not yet paid in cash.
+        // Lunch, Transport, and Damages are shown for visibility only, never
+        // added in here - Lunch/Transport are cash taken OUT of what was
+        // already collected (not extra sales), and Damages never generated a
+        // sale at all, so folding any of them in here would overstate the day.
+        $grandTotal = $totalCollected + $ngongoleTotal;
+        $grandTotalVariance = $grandTotal - $totalSales;
 
         $reconciliation = $this->shiftCollectionMath(
             (float) $totalSales,
@@ -882,9 +925,15 @@ class ReportsController extends Controller
             'expectedCollected',
             'totalPayments',
             'lunchTotal',
+            'lunchBreakdown',
+            'transportTotal',
+            'transportBreakdown',
             'damagesTotal',
+            'damagesBreakdown',
             'ngongoleTotal',
-            'grandTotal'
+            'ngongoleBreakdown',
+            'grandTotal',
+            'grandTotalVariance'
         ));
     }
 
@@ -968,9 +1017,10 @@ class ReportsController extends Controller
         $shiftDebtInForm = collect($shiftExpenditures)->where('type', 'debt')->sum('amount');
         $baseCreditSales = max(0, $creditSales - $shiftDebtInForm);
         $balancePayments = $this->balancePaymentsForForm($dailyReport);
+        $damageItems = $this->getDamageItemsForBar($dailyReport->bar_id);
 
         return view('reporting.edit', compact(
-            'dailyReport', 
+            'dailyReport',
             'paymentMethods',
             'expenses',
             'totalExpenses',
@@ -984,7 +1034,8 @@ class ReportsController extends Controller
             'bankableBalance',
             'expenditureTypes',
             'shiftExpenditures',
-            'balancePayments'
+            'balancePayments',
+            'damageItems'
         ));
     }
 
@@ -1019,6 +1070,8 @@ class ReportsController extends Controller
             'expenditures.*.amount' => 'nullable|numeric|min:0',
             'expenditures.*.notes' => 'nullable|string|max:500',
             'expenditures.*.photo' => 'nullable|image|max:5120',
+            'expenditures.*.item_id' => 'nullable|integer|exists:items,id',
+            'expenditures.*.quantity' => 'nullable|numeric|min:0',
             'notes' => 'nullable|string|max:1000',
         ]);
 
@@ -1140,7 +1193,10 @@ class ReportsController extends Controller
     {
         $items = [];
 
-        $expenseQuery = Expense::where('date', $date);
+        // Damages are recorded as a DamagedGood + CustomerTab (see
+        // syncShiftExpenditures), not as an Expense - excluded here so a
+        // damages row never appears twice in the prefilled form.
+        $expenseQuery = Expense::where('date', $date)->where('type', '!=', 'damages');
         if ($user->isSeller()) {
             $expenseQuery->where('user_id', $user->id);
         } elseif ($stockEntry) {
@@ -1176,7 +1232,47 @@ class ReportsController extends Controller
             ];
         }
 
+        $damageQuery = DamagedGood::whereDate('date', $date)->where('from_balance', true);
+        if ($user->bar_id) {
+            $damageQuery->where('bar_id', $user->bar_id);
+        }
+        if ($user->isSeller()) {
+            $damageQuery->where('user_id', $user->id);
+        }
+
+        foreach ($damageQuery->get() as $damage) {
+            $items[] = [
+                'type' => 'damages',
+                'amount' => $damage->amount,
+                'notes' => $damage->description ?? '',
+                'item_id' => $damage->item_id,
+                'quantity' => $damage->quantity,
+            ];
+        }
+
         return $items;
+    }
+
+    /**
+     * Items a seller can pick as "what got damaged", with the bar-specific
+     * selling price used to auto-suggest a loss amount on the Balance form.
+     */
+    private function getDamageItemsForBar(?int $barId): array
+    {
+        $barPrices = $barId
+            ? BarItemPrice::where('bar_id', $barId)->pluck('price', 'item_id')
+            : collect();
+
+        return Item::where('is_hidden', false)
+            ->orderBy('id')
+            ->get(['id', 'name', 'price'])
+            ->map(fn ($item) => [
+                'id' => $item->id,
+                'name' => $item->name,
+                'price' => (float) ($barPrices[$item->id] ?? $item->price ?? 0),
+            ])
+            ->values()
+            ->all();
     }
 
     private function normalizeBalancePayments(array $payments): array
@@ -1255,7 +1351,15 @@ class ReportsController extends Controller
         if ($barId) {
             $balanceDamageQuery->where('bar_id', $barId);
         }
-        $balanceDamageQuery->get()->each(function (DamagedGood $item) {
+        $balanceDamageQuery->get()->each(function (DamagedGood $item) use ($barId) {
+            // This save is being re-submitted (edit/resave): before wiping the
+            // previously recorded damage, give its stock deduction back so it
+            // isn't double-deducted once the (possibly changed) new entries
+            // below are applied.
+            if ($barId && $item->item_id && (float) $item->quantity > 0) {
+                $this->adjustStockForDamage($barId, (int) $item->item_id, (float) $item->quantity, $item->date->format('Y-m-d'), $item->user_id, reverse: true);
+            }
+
             DamagedGoodController::deleteDamagePhoto($item->photo_path);
             $item->delete();
         });
@@ -1265,6 +1369,12 @@ class ReportsController extends Controller
                 ->whereDate('date', $date)
                 ->where('created_by', $user->id)
                 ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
+                ->delete();
+
+            CustomerTab::where('bar_id', $barId)
+                ->whereDate('date', $date)
+                ->where('created_by', $user->id)
+                ->where('description', 'like', Expense::SHIFT_DAMAGE_PREFIX . '%')
                 ->delete();
         }
 
@@ -1276,6 +1386,8 @@ class ReportsController extends Controller
 
             $type = $row['type'] ?? '';
             $notes = trim($row['notes'] ?? '');
+            $damageItemId = ($type === 'damages' && !empty($row['item_id'])) ? (int) $row['item_id'] : null;
+            $damageQuantity = $damageItemId ? (float) ($row['quantity'] ?? 0) : 0.0;
 
             if ($type === 'debt' && $barId) {
                 $customerName = $notes ?: 'Credit Customer';
@@ -1290,6 +1402,53 @@ class ReportsController extends Controller
                     'description' => Expense::SHIFT_DEBT_PREFIX . ' ' . $notes,
                     'created_by' => $user->id,
                 ]);
+            } elseif ($type === 'damages' && $barId) {
+                // Damages are NOT an expense (no cash was paid out) - they're
+                // recorded the same way Ngongole is: as a tab/credit-style
+                // entry, since the stock left the shelf without any money
+                // coming in for it. DamagedGood keeps the item/photo evidence;
+                // the CustomerTab is what makes it show up on Credit Tabs and
+                // keeps it out of the cash "Expenses" figures.
+                $itemName = $damageItemId ? Item::find($damageItemId)?->name : null;
+
+                DamagedGood::create([
+                    'date' => $date,
+                    'description' => $notes ?: 'Damaged goods',
+                    'amount' => $amount,
+                    'photo_path' => DamagedGoodController::storeDamagePhoto(
+                        $request->file("expenditures.{$index}.photo")
+                    ),
+                    'from_balance' => true,
+                    'bar_id' => $barId,
+                    'item_id' => $damageItemId,
+                    'quantity' => $damageItemId ? $damageQuantity : null,
+                    'user_id' => $user->id,
+                ]);
+
+                // Marked as already "paid" (balance 0): nobody owes this money -
+                // it's a loss, not a receivable - so it must NOT add to Credit
+                // Sales / Total Outstanding alongside real customer debt. It
+                // still shows up on the Credit Tabs list as a $0-balance entry,
+                // which is all "put it in the tabs" needs it to do.
+                CustomerTab::create([
+                    'customer_name' => $itemName ? "Damaged: {$itemName}" : 'Damaged Goods',
+                    'phone' => null,
+                    'bar_id' => $barId,
+                    'date' => $date,
+                    'amount' => $amount,
+                    'paid_amount' => $amount,
+                    'status' => 'paid',
+                    'description' => Expense::SHIFT_DAMAGE_PREFIX . ' ' . ($notes ?: 'Damaged goods'),
+                    'created_by' => $user->id,
+                ]);
+
+                // Damages are treated like a sale for stock purposes: the
+                // broken unit(s) come off the shelf immediately, the same
+                // way a sold unit would, but without counting as revenue
+                // (the loss is tracked separately via the tab above).
+                if ($damageItemId && $damageQuantity > 0) {
+                    $this->adjustStockForDamage($barId, $damageItemId, $damageQuantity, $date, $user->id);
+                }
             } elseif (array_key_exists($type, Expense::operationalTypes())) {
                 Expense::create([
                     'stock_entry_id' => $stockEntry?->id,
@@ -1299,22 +1458,80 @@ class ReportsController extends Controller
                     'date' => $date,
                     'user_id' => $user->id,
                 ]);
-
-                if ($type === 'damages' && $barId) {
-                    DamagedGood::create([
-                        'date' => $date,
-                        'description' => $notes ?: 'Damaged goods',
-                        'amount' => $amount,
-                        'photo_path' => DamagedGoodController::storeDamagePhoto(
-                            $request->file("expenditures.{$index}.photo")
-                        ),
-                        'from_balance' => true,
-                        'bar_id' => $barId,
-                        'user_id' => $user->id,
-                    ]);
-                }
             }
         }
+    }
+
+    /**
+     * Treat a damaged quantity like a sale for stock purposes: it comes off
+     * the shelf (closing_stock drops, sold_quantity rises) the same way a
+     * sold unit would, but WITHOUT adding to sales_amount, since it wasn't
+     * actually sold for money (that loss is tracked separately as a tab).
+     *
+     * Pass reverse: true to give a previously-deducted quantity back, used
+     * when a Balance save is re-submitted and the old damage rows (already
+     * deducted once) are about to be replaced by the newly submitted set.
+     */
+    private function adjustStockForDamage(int $barId, int $itemId, float $quantity, string $date, int $userId, bool $reverse = false): void
+    {
+        if ($quantity <= 0) {
+            return;
+        }
+
+        $delta = $reverse ? -$quantity : $quantity;
+
+        // Find this item's own most recent stock entry row for this bar,
+        // regardless of which day's sheet it lives in - mirrors the director
+        // Stock Overview's "latest per item" lookup (see updateStock()).
+        $stockEntryItem = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+            ->where('sales.bar_id', $barId)
+            ->where('stock_entry_items.item_id', $itemId)
+            ->orderBy('sales.date', 'desc')
+            ->orderBy('stock_entry_items.updated_at', 'desc')
+            ->orderBy('stock_entry_items.id', 'desc')
+            ->select('stock_entry_items.*')
+            ->first();
+
+        if (!$stockEntryItem) {
+            if ($reverse) {
+                // Nothing to restore - a deduction always creates a row first.
+                return;
+            }
+
+            $todaySale = Sale::firstOrCreate(
+                ['bar_id' => $barId, 'date' => $date],
+                ['user_id' => $userId]
+            );
+
+            StockEntryItem::create([
+                'stock_entry_id' => $todaySale->id,
+                'item_id' => $itemId,
+                'opening_stock' => 0,
+                'ordered_stock' => 0,
+                'sold_quantity' => $quantity,
+                'price' => Item::find($itemId)?->price ?? 0,
+                'purchase_price' => 0,
+            ]);
+
+            return;
+        }
+
+        // Write sold_quantity/closing_stock directly, bypassing the model's
+        // mutators - they recompute sales_amount from sold_quantity, which
+        // would wrongly book the damaged quantity as revenue. total_stock
+        // (opening + ordered) is left untouched.
+        $totalStock = (float) $stockEntryItem->total_stock;
+        $newSold = max(0, (float) $stockEntryItem->sold_quantity + $delta);
+        $newClosing = max(0, $totalStock - $newSold);
+
+        $stockEntryItem->setRawAttributes(array_merge(
+            $stockEntryItem->getAttributes(),
+            [
+                'sold_quantity' => $newSold,
+                'closing_stock' => $newClosing,
+            ]
+        ), false);
+        $stockEntryItem->save();
     }
 
     /**

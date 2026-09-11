@@ -84,8 +84,11 @@
                                     $expenditureBreakdown = $expenditureBreakdowns[$bar->id] ?? [];
                                     $creditSales = $creditSalesByBar[$bar->id] ?? 0;
 
+                                    // Damages and Debt are shown for visibility only - no cash was
+                                    // actually paid out for either, so both are excluded from the
+                                    // cash "Expenses" figure that feeds Bankable Balance below.
                                     $operationalExpenses = collect($expenditureBreakdown)
-                                        ->except('Debt (Credit Sale)')
+                                        ->except(['Debt (Credit Sale)', 'Damages'])
                                         ->sum();
 
                                     $totalCollected = collect($paymentBreakdown)->sum();
@@ -140,7 +143,7 @@
                                                 @if($amount > 0)
                                                 <div class="metric-row">
                                                     <span class="small text-muted">{{ $type }}</span>
-                                                    <span class="fw-bold {{ $type === 'Debt (Credit Sale)' ? 'text-purple' : 'text-danger' }}">{{ number_format($amount) }}</span>
+                                                    <span class="fw-bold {{ $type === 'Debt (Credit Sale)' ? 'text-purple' : ($type === 'Damages' ? 'text-warning' : 'text-danger') }}">{{ number_format($amount) }}</span>
                                                 </div>
                                                 @endif
                                             @endforeach

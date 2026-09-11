@@ -114,7 +114,14 @@
                 <p class="text-muted small mb-0">{{ auth()->user()->isSeller() ? 'Recording sales for' : 'Adjusting records for' }} <strong>{{ $stockEntry->date->format('M d, Y') }}</strong></p>
             </div>
         </div>
-        <div class="d-flex gap-2 align-items-center">
+        <div class="d-flex gap-2 align-items-center flex-wrap">
+            @if(auth()->user()->bar_id)
+                <form method="GET" action="{{ route('stock-entries.create') }}" class="d-flex align-items-center gap-2">
+                    <label for="jumpDate" class="small fw-bold text-muted mb-0 text-nowrap">📅 Switch day</label>
+                    <input type="date" id="jumpDate" name="date" value="{{ $stockEntry->date->format('Y-m-d') }}" max="{{ now()->format('Y-m-d') }}"
+                           class="form-control form-control-sm" style="width: auto;" onchange="this.form.submit()">
+                </form>
+            @endif
             <input type="search" id="edit_table_search" class="form-control form-control-sm table-search me-3" placeholder="Search items">
             <span class="badge bg-primary rounded-pill px-3 py-2">📍 {{ auth()->user()->bar->name ?? 'Main Bar' }}</span>
         </div>
@@ -207,12 +214,12 @@
                                         @if(!($item['can_sell'] ?? true))
                                             <div class="small text-danger mb-1" style="font-size:0.65rem;">Out of stock</div>
                                             <div class="d-flex align-items-center justify-content-center gap-1">
-                                                <input type="number" class="form-control-stock new-sales text-primary" min="0" value="0" placeholder="0" readonly disabled>
+                                                <input type="number" class="form-control-stock new-sales text-primary" min="0" value="" placeholder="0" readonly disabled>
                                                 <input type="hidden" name="items[{{ $index }}][sales]" class="sales" value="0">
                                             </div>
                                         @else
                                             <div class="d-flex align-items-center justify-content-center gap-1">
-                                                <input type="number" class="form-control-stock new-sales text-primary" min="0" value="0" placeholder="0" data-available-base="{{ $item['available_stock'] }}" data-available-display="{{ $item['available_stock_display'] ?? $item['available_stock'] }}">
+                                                <input type="number" class="form-control-stock new-sales text-primary" min="0" value="" placeholder="0" data-available-base="{{ $item['available_stock'] }}" data-available-display="{{ $item['available_stock_display'] ?? $item['available_stock'] }}">
                                                 <input type="hidden" name="items[{{ $index }}][sales]" class="sales" value="0">
                                                 <input type="hidden" name="items[{{ $index }}][clear_sales]" class="clear-sales" value="0">
                                                 <button type="button" class="btn btn-clear-sale" title="Clear sales for this item" onclick="clearItemSales(this)">
@@ -377,7 +384,7 @@ function clearItemSales(btn) {
     if (clearSalesInput) clearSalesInput.value = '1';
 
     // Reset the local inputs so the screen immediately shows zero sales.
-    newSalesInput.value = 0;
+    newSalesInput.value = '';
     const salesHidden = row.querySelector('.sales');
     if (salesHidden) salesHidden.value = 0;
 

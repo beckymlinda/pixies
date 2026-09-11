@@ -8,6 +8,7 @@ use App\Models\Sale;
 use App\Models\CashReconciliation;
 use App\Models\Bar;
 use App\Models\CustomerTab;
+use App\Models\DamagedGood;
 use App\Models\Expense;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -97,7 +98,11 @@ class ReconciliationController extends Controller
 
     private function getExpenditureBreakdown(Sale $entry): array
     {
+        // Damages are excluded here - they're recorded as a DamagedGood + tab
+        // (see ReportsController::syncShiftExpenditures), not an Expense, so
+        // they never count as cash spent.
         $expenses = Expense::where('date', $entry->date)
+            ->where('type', '!=', 'damages')
             ->where(function ($query) use ($entry) {
                 $query->where('stock_entry_id', $entry->id)
                     ->orWhere('user_id', $entry->user_id);
@@ -117,6 +122,15 @@ class ReconciliationController extends Controller
 
         if ($shiftDebt > 0) {
             $breakdown['Debt (Credit Sale)'] = (float) $shiftDebt;
+        }
+
+        $damagesTotal = DamagedGood::where('date', $entry->date)
+            ->where('bar_id', $entry->bar_id)
+            ->where('from_balance', true)
+            ->sum('amount');
+
+        if ($damagesTotal > 0) {
+            $breakdown['Damages'] = (float) $damagesTotal;
         }
 
         return $breakdown;
@@ -175,17 +189,39 @@ class ReconciliationController extends Controller
             ->where('status', '!=', 'paid')
             ->sum('balance');
 
-        $totalExpenses = Expense::where('stock_entry_id', $stockEntry->id)
-            ->sum('amount');
+        $expensesForBreakdown = Expense::with('item')
+            ->where('stock_entry_id', $stockEntry->id)
+            ->get();
 
-        if ($totalExpenses == 0) {
-            $totalExpenses = Expense::where('date', $stockEntry->date)
+        if ($expensesForBreakdown->isEmpty()) {
+            $expensesForBreakdown = Expense::with('item')
+                ->where('date', $stockEntry->date)
                 ->where(function ($query) use ($stockEntry) {
                     $query->where('stock_entry_id', $stockEntry->id)
                           ->orWhere('user_id', $stockEntry->user_id);
                 })
-                ->sum('amount');
+                ->get();
         }
+
+        // Damages are recorded as a DamagedGood + tab, not an Expense (see
+        // ReportsController::syncShiftExpenditures), so $totalExpenses here
+        // never includes them - no cash was actually paid out for a damage.
+        $totalExpenses = (float) $expensesForBreakdown->sum('amount');
+
+        $damageEntries = DamagedGood::with('item')
+            ->where('bar_id', $stockEntry->bar_id)
+            ->where('date', $stockEntry->date)
+            ->where('from_balance', true)
+            ->get();
+        $damagesTotal = (float) $damageEntries->sum('amount');
+        $damagesBreakdown = $damageEntries
+            ->filter(fn ($e) => $e->item_id && (float) $e->quantity > 0)
+            ->map(function ($e) {
+                $name = $e->item?->name ?? 'Item';
+                $qty = rtrim(rtrim(number_format((float) $e->quantity, 2), '0'), '.');
+                return "{$name} x{$qty}";
+            })
+            ->implode(', ');
 
         $bankableBalance = $totalCollected - $totalExpenses;
 
@@ -197,6 +233,8 @@ class ReconciliationController extends Controller
             'expectedCollected',
             'creditSales',
             'totalExpenses',
+            'damagesTotal',
+            'damagesBreakdown',
             'bankableBalance',
             'cashInHand',
             'dailyReport'

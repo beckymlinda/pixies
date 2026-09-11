@@ -6,17 +6,14 @@
     .entry-header {
         background: white;
         border-bottom: 1px solid #e2e8f0;
-        margin-top: -1.5rem;
-        margin-left: -1.5rem;
-        margin-right: -1.5rem;
         padding: 1rem 2rem;
         margin-bottom: 1.5rem;
+        position: relative;
+        z-index: 1;
     }
 
     @media (max-width: 768px) {
         .entry-header {
-            margin-left: -1rem;
-            margin-right: -1rem;
             padding: 1rem;
         }
     }
@@ -187,12 +184,16 @@
             @if(auth()->user()->bar)
                 <span class="badge bg-dark text-white badge-pill-custom">📍 {{ auth()->user()->bar->name }}</span>
             @endif
-            <span class="badge bg-light text-dark border border-secondary border-opacity-20 badge-pill-custom">📅 {{ now()->format('M d, Y') }}</span>
+            <form method="GET" action="{{ route('stock-entries.create') }}" class="d-flex align-items-center gap-2">
+                <label for="sheetDate" class="small fw-bold text-muted mb-0 text-nowrap">📅 Sheet date</label>
+                <input type="date" id="sheetDate" name="date" value="{{ $date }}" max="{{ now()->format('Y-m-d') }}"
+                       class="form-control form-control-sm" style="width: auto;" onchange="this.form.submit()">
+            </form>
         </div>
         <div class="d-flex gap-2 align-items-center">
              <div class="d-flex align-items-center gap-2 w-100">
                  <input type="search" id="create_table_search" class="form-control form-control-sm" placeholder="Search items" style="width:100%">
-                 <span class="text-muted small">Page {{ $currentPage }} of {{ $totalPages }}</span>
+                 <span class="text-muted small text-nowrap">{{ $paginatedItems->count() }} items</span>
              </div>
         </div>
     </div>
@@ -226,7 +227,7 @@
 
         <form method="POST" action="{{ route('stock-entries.store') }}" id="stock-entry-form">
             @csrf
-            <input type="hidden" name="date" value="{{ now()->format('Y-m-d') }}">
+            <input type="hidden" name="date" value="{{ $date }}">
             
             <div class="card border-0 shadow-sm rounded-4 overflow-hidden mb-5" style="max-width: 100%;">
                 <div class="table-responsive">
@@ -287,10 +288,10 @@
                                         @if(!($item['can_sell'] ?? true))
                                             <div class="small text-danger mb-1" style="font-size:0.65rem;">Out of stock — <a href="{{ route('seller.orders.create') }}">request stock</a></div>
                                             <input type="hidden" name="items[{{ $index }}][sales]" value="0">
-                                            <input type="number" class="item-input sales bg-light" min="0" step="1" value="0" readonly tabindex="-1">
+                                            <input type="number" class="item-input sales bg-light" min="0" step="1" value="" placeholder="0" readonly tabindex="-1">
                                         @else
                                             <div class="d-flex flex-column align-items-center gap-1">
-                                                <input type="number" name="items[{{ $index }}][sales]" class="item-input sales" min="0" step="1" value="0" data-available-base="{{ $item['available_stock'] ?? ($item['opening_stock'] + $item['ordered_stock']) }}" data-available-display="{{ $item['available_stock_display'] ?? ($item['opening_stock_display'] ?? $item['opening_stock']) + ($item['ordered_stock_display'] ?? $item['ordered_stock']) }}">
+                                                <input type="number" name="items[{{ $index }}][sales]" class="item-input sales" min="0" step="1" value="" placeholder="0" data-available-base="{{ $item['available_stock'] ?? ($item['opening_stock'] + $item['ordered_stock']) }}" data-available-display="{{ $item['available_stock_display'] ?? ($item['opening_stock_display'] ?? $item['opening_stock']) + ($item['ordered_stock_display'] ?? $item['ordered_stock']) }}">
                                                 <button type="button" class="btn btn-sm btn-outline-danger delete-sale-btn" title="Delete sale">Clear</button>
                                             </div>
                                         @endif
@@ -302,27 +303,6 @@
                             @endforeach
                         </tbody>
                     </table>
-                </div>
-                
-                <!-- Compact Pagination -->
-                <div class="bg-light p-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
-                    <div>
-                        @if($currentPage > 1)
-                            <a href="{{ route('stock-entries.create', ['page' => $currentPage - 1]) }}" class="btn btn-sm btn-outline-secondary rounded-pill px-3 bg-white">
-                                <i class="bi bi-chevron-left me-1"></i> Previous
-                            </a>
-                        @endif
-                    </div>
-                    <div class="small text-muted fw-medium">
-                        Showing {{ (($currentPage - 1) * $perPage) + 1 }} - {{ min($currentPage * $perPage, $items->count()) }} of {{ $items->count() }}
-                    </div>
-                    <div>
-                        @if($currentPage < $totalPages)
-                            <a href="{{ route('stock-entries.create', ['page' => $currentPage + 1]) }}" class="btn btn-sm btn-primary rounded-pill px-3">
-                                Next <i class="bi bi-chevron-right ms-1"></i>
-                            </a>
-                        @endif
-                    </div>
                 </div>
             </div>
 
@@ -370,7 +350,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!row) return;
             const salesInput = row.querySelector('.sales');
             if (!salesInput) return;
-            salesInput.value = 0;
+            salesInput.value = '';
             updateSaleRow(row);
         }
     });

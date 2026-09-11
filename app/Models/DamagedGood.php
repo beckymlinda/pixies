@@ -14,12 +14,15 @@ class DamagedGood extends Model
         'photo_path',
         'from_balance',
         'bar_id',
+        'item_id',
+        'quantity',
         'user_id',
     ];
 
     protected $casts = [
         'date' => 'date',
         'amount' => 'decimal:2',
+        'quantity' => 'decimal:2',
         'from_balance' => 'boolean',
     ];
 
@@ -34,6 +37,11 @@ class DamagedGood extends Model
     public function bar(): BelongsTo
     {
         return $this->belongsTo(Bar::class);
+    }
+
+    public function item(): BelongsTo
+    {
+        return $this->belongsTo(Item::class);
     }
 
     public function user(): BelongsTo
