@@ -16,7 +16,13 @@
                     <div class="d-flex flex-column flex-md-row align-items-start align-items-md-center justify-content-between gap-3">
                         <div>
                             <h1 class="h3 fw-bold mb-1 text-dark">Stock Management</h1>
-                            <p class="text-muted small mb-0">View and manage current bar stock across all locations.</p>
+                            <p class="text-muted small mb-0">
+                                @if($selectedBarId && $bars->firstWhere('id', $selectedBarId))
+                                    Viewing stock for <strong>{{ $bars->firstWhere('id', $selectedBarId)->name }}</strong>.
+                                @else
+                                    Viewing stock across all bars. Pick a bar from the Stock menu in the sidebar to narrow this down.
+                                @endif
+                            </p>
                         </div>
                         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
                             @if($canManageStock)
@@ -25,19 +31,16 @@
                                 </button>
                             @endif
                             <form method="GET" action="{{ route('stock.index') }}" class="d-flex gap-2 flex-grow-1">
+                                {{-- Bar selection lives in the sidebar's Stock dropdown now - this
+                                     form only searches within whatever bar that link carried in. --}}
+                                <input type="hidden" name="bar_id" value="{{ $selectedBarId }}">
                                 <div class="input-group shadow-sm rounded-pill overflow-hidden border border-secondary border-opacity-10">
                                     <span class="input-group-text bg-white border-0 ps-3"><i class="bi bi-search text-muted"></i></span>
-                                    <input type="text" name="search" class="form-control border-0" placeholder="Search item, category, bar..." value="{{ request('search') }}">
-                                    <select name="bar_id" class="form-select border-0 border-start">
-                                        <option value="">All Bars</option>
-                                        @foreach($bars as $bar)
-                                            <option value="{{ $bar->id }}" {{ $selectedBarId == $bar->id ? 'selected' : '' }}>{{ $bar->name }}</option>
-                                        @endforeach
-                                    </select>
-                                    <button type="submit" class="btn btn-primary px-4">Filter</button>
+                                    <input type="text" name="search" class="form-control border-0" placeholder="Search item or category..." value="{{ request('search') }}">
+                                    <button type="submit" class="btn btn-primary px-4">Search</button>
                                 </div>
-                                @if(request('search') || request('bar_id'))
-                                    <a href="{{ route('stock.index') }}" class="btn btn-outline-secondary rounded-pill px-3 d-flex align-items-center" title="Clear Filters">
+                                @if(request('search'))
+                                    <a href="{{ route('stock.index', ['bar_id' => $selectedBarId]) }}" class="btn btn-outline-secondary rounded-pill px-3 d-flex align-items-center" title="Clear Search">
                                         <i class="bi bi-x-circle me-1"></i> Clear
                                     </a>
                                 @endif
@@ -64,7 +67,12 @@
     @endif
 
     @php
-        $stockItemsData = $stockRows->keyBy('item_id')->map(fn($r) => [
+        // Keyed by "bar_id_item_id", not just item_id - product_units carries
+        // each bar's OWN prices now, and the same item appears once per bar
+        // in $stockRows, so keying by item_id alone would collapse every
+        // bar's row onto whichever one happened to be last, showing (and on
+        // save, overwriting) the wrong bar's prices in the Edit modal.
+        $stockItemsData = $stockRows->keyBy(fn($r) => $r['bar_id'] . '_' . $r['item_id'])->map(fn($r) => [
             'item_name' => $r['item_name'],
             'category' => $r['category'],
             'product_units' => $r['product_units'],
@@ -105,7 +113,7 @@
                                     <td class="align-middle text-capitalize"><span class="badge bg-secondary bg-opacity-10 text-dark border-0 px-2 py-1">{{ $row['category'] }}</span></td>
                                     <td class="align-middle">
                                         @if($canManageStock)
-                                            <span class="editable-stock fw-bold text-primary" onclick="editStock({{ $row['item_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})" style="cursor: pointer;" title="Click to edit stock">
+                                            <span class="editable-stock fw-bold text-primary" onclick="editStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})" style="cursor: pointer;" title="Click to edit stock">
                                                 {{ number_format($row['stock']) }}
                                                 <i class="bi bi-pencil-square small ms-1 opacity-75"></i>
                                             </span>
@@ -130,10 +138,10 @@
                                                 <button class="btn btn-sm btn-outline-success" onclick="restockStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }}, {{ $row['selling_price'] }})">
                                                     <i class="bi bi-plus-lg me-1"></i> Restock
                                                 </button>
-                                                <button class="btn btn-sm btn-outline-primary" onclick="editStock({{ $row['item_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})">
+                                                <button class="btn btn-sm btn-outline-primary" onclick="editStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})">
                                                     <i class="bi bi-pencil"></i> Edit
                                                 </button>
-                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteStock('{{ $row['item_name'] }}', '{{ $row['bar_name'] }}')">
+                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}')">
                                                     <i class="bi bi-trash"></i> Delete
                                                 </button>
                                             </div>
@@ -508,8 +516,8 @@ function calculateNewTotalStock() {
     document.getElementById('restockNewTotalDisplay').innerText = (current + additional).toLocaleString();
 }
 
-function editStock(itemId, itemName, barName, currentStock) {
-    const data = window.stockItems[itemId] || {};
+function editStock(itemId, barId, itemName, barName, currentStock) {
+    const data = window.stockItems[barId + '_' + itemId] || {};
     const category = data.category || '';
     let productUnits = data.product_units || [];
 
@@ -611,11 +619,11 @@ function refreshEditUnitRows() {
     });
 }
 
-function deleteStock(itemName, barName) {
+function deleteStock(itemId, barId, itemName, barName) {
     if (confirm(`Are you sure you want to delete stock for ${itemName} at ${barName}?`)) {
         const filterBarId = @json((string) $selectedBarId);
         const filterSearch = @json((string) $search);
-        let url = `/stock/delete?item=${encodeURIComponent(itemName)}&bar=${encodeURIComponent(barName)}`;
+        let url = `/stock/delete?item_id=${encodeURIComponent(itemId)}&bar_id=${encodeURIComponent(barId)}`;
         if (filterBarId) url += `&filter_bar_id=${encodeURIComponent(filterBarId)}`;
         if (filterSearch) url += `&filter_search=${encodeURIComponent(filterSearch)}`;
         window.location.href = url;

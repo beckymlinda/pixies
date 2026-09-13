@@ -13,6 +13,8 @@ use App\Models\Item;
 use App\Models\BottleCount;
 use App\Models\ProductUnit;
 use App\Models\ProductUnitPrice;
+use App\Models\ProductUnitBarPrice;
+use App\Models\ItemBarName;
 use App\Models\ProductPurchaseHistory;
 use App\Models\InventoryLedger;
 use App\Models\WarehouseStock;
@@ -174,7 +176,7 @@ class StockEntryController extends Controller
             
             return [
                 'id' => $item->id,
-                'name' => $item->name,
+                'name' => $item->displayNameForBar($user->bar_id),
                 'category' => $item->category,
                 'price' => $barItemPrice ? $barItemPrice->price : $item->price,
                 'purchase_price' => $baseUnitCost,
@@ -274,7 +276,7 @@ class StockEntryController extends Controller
                 // Get correct unit price if unit_name is provided
                 $unitPrice = $itemData['price'];
                 if ($unitName) {
-                    $unitPriceModel = $inventoryService->getUnitPrice($itemId, $unitName);
+                    $unitPriceModel = $inventoryService->getUnitPrice($itemId, $unitName, $user->bar_id);
                     if ($unitPriceModel) {
                         $unitPrice = $unitPriceModel->selling_price;
                     }
@@ -482,7 +484,7 @@ class StockEntryController extends Controller
             
             return [
                 'id' => $item->id,
-                'name' => $item->name,
+                'name' => $item->displayNameForBar($stockEntry->bar_id),
                 'category' => $item->category,
                 'price' => $price,
                 'opening_stock' => $openingStock,
@@ -556,7 +558,7 @@ class StockEntryController extends Controller
             
             return [
                 'id' => $item->id,
-                'name' => $item->name,
+                'name' => $item->displayNameForBar($stockEntry->bar_id),
                 'category' => $item->category,
                 'price' => $price,
                 'opening_stock' => $figures['opening_stock'],
@@ -664,7 +666,7 @@ class StockEntryController extends Controller
                 // Get correct unit price if unit_name is provided
                 $unitPrice = $itemData['price'] ?? ($existingStockItem->price ?? 0);
                 if ($unitName) {
-                    $unitPriceModel = $inventoryService->getUnitPrice($itemId, $unitName);
+                    $unitPriceModel = $inventoryService->getUnitPrice($itemId, $unitName, $stockEntry->bar_id);
                     if ($unitPriceModel) {
                         $unitPrice = $unitPriceModel->selling_price;
                     }
@@ -860,6 +862,22 @@ class StockEntryController extends Controller
             ->groupBy('item_id')
             ->map(fn ($group) => $group->keyBy('unit_name'));
 
+        // Per-bar per-unit overrides, keyed by "bar_id_item_id" then unit_name,
+        // so each bar's row shows its OWN price instead of falling back to the
+        // same global default for every bar.
+        $productUnitBarPrices = ProductUnitBarPrice::whereIn('bar_id', $barIds)
+            ->whereIn('item_id', $itemIds)
+            ->get()
+            ->groupBy(fn ($p) => $p->bar_id . '_' . $p->item_id)
+            ->map(fn ($group) => $group->keyBy('unit_name'));
+
+        // Per-bar display name overrides, keyed by "bar_id_item_id", so each
+        // bar's row shows its own name instead of the shared catalog name.
+        $itemBarNames = ItemBarName::whereIn('bar_id', $barIds)
+            ->whereIn('item_id', $itemIds)
+            ->get()
+            ->keyBy(fn ($n) => $n->bar_id . '_' . $n->item_id);
+
         // Drop rows whose item has been hidden (deleted), so it no longer appears
         // in the director stock overview.
         $latestStocks = $latestStocks->filter(function ($stock) use ($items) {
@@ -874,8 +892,14 @@ class StockEntryController extends Controller
                 return $group->keyBy('item_id');
             });
 
-        $stockRows = $latestStocks->map(function ($stock) use ($items, $barNames, $barItemPrices, $productUnitPrices) {
+        // When each item was first added to each bar - used only to order the
+        // list (oldest at top, most recently added at the bottom), never to
+        // change what's displayed.
+        $firstAddedDates = $this->firstAddedDatesForBars($itemIds, $barIds);
+
+        $stockRows = $latestStocks->map(function ($stock) use ($items, $barNames, $barItemPrices, $productUnitPrices, $productUnitBarPrices, $itemBarNames, $firstAddedDates) {
             $item = $items->get($stock->item_id);
+            $itemName = $itemBarNames->get($stock->bar_id . '_' . $stock->item_id)?->name ?? ($item?->name ?? 'Unknown');
             $sellingPrice = $barItemPrices->get($stock->bar_id)?->get($stock->item_id)?->price ?? ($item?->price ?? 0);
             $purchasePrice = $stock->purchase_price > 0
                 ? $stock->purchase_price
@@ -890,8 +914,10 @@ class StockEntryController extends Controller
                 : 0;
 
             $itemPrices = $productUnitPrices->get($item?->id);
-            $productUnits = $item?->productUnits->map(function ($u) use ($itemPrices) {
-                $price = $itemPrices?->get($u->unit_name);
+            $itemBarPrices = $productUnitBarPrices->get($stock->bar_id . '_' . $stock->item_id);
+            $productUnits = $item?->productUnits->map(function ($u) use ($itemPrices, $itemBarPrices) {
+                // Bar-specific override wins; fall back to the global default.
+                $price = $itemBarPrices?->get($u->unit_name) ?? $itemPrices?->get($u->unit_name);
 
                 return [
                     'unit_name' => $u->unit_name,
@@ -902,11 +928,13 @@ class StockEntryController extends Controller
                 ];
             })->values()->all() ?? [];
 
+            $firstAddedAt = $firstAddedDates->get($stock->bar_id . '_' . $stock->item_id) ?? $item?->created_at;
+
             return [
                 'bar_id' => $stock->bar_id,
                 'item_id' => $stock->item_id,
                 'bar_name' => $barNames->get($stock->bar_id, 'Unknown'),
-                'item_name' => $item?->name ?? 'Unknown',
+                'item_name' => $itemName,
                 'category' => $item?->category ?? 'Unknown',
                 'stock' => $stock->closing_stock,
                 'price' => $purchasePrice,
@@ -915,8 +943,9 @@ class StockEntryController extends Controller
                 'markup_percentage' => round($markupPercentage, 2),
                 'last_updated' => $stock->stock_date,
                 'product_units' => $productUnits,
+                'first_added_at' => $firstAddedAt,
             ];
-        })->sortBy([['bar_id', 'asc'], ['item_id', 'asc']])->values();
+        })->sortBy([['bar_id', 'asc'], ['first_added_at', 'asc']])->values();
 
         if (!empty($search)) {
             $stockRows = $stockRows->filter(function ($row) use ($search) {
@@ -1062,7 +1091,7 @@ class StockEntryController extends Controller
 
             return [
                 'id' => $item->id,
-                'name' => $item->name,
+                'name' => $item->displayNameForBar($barId),
                 'category' => $item->category,
                 'description' => $item->description ?? '',
                 'price' => $item->barItemPrices->first()?->price ?? 0,
@@ -1157,6 +1186,14 @@ class StockEntryController extends Controller
                 'purchase_price' => $calculatedBaseUnitCost,
             ]);
 
+            ProductUnitBarPrice::create([
+                'bar_id' => $request->bar_id,
+                'item_id' => $item->id,
+                'unit_name' => $request->base_unit,
+                'selling_price' => $request->base_unit_selling_price,
+                'purchase_price' => $calculatedBaseUnitCost,
+            ]);
+
             // Create additional units if provided
             if ($request->has('additional_units') && is_array($request->additional_units)) {
                 foreach ($request->additional_units as $unitData) {
@@ -1172,6 +1209,14 @@ class StockEntryController extends Controller
                         if (isset($unitData['selling_price']) && $unitData['selling_price'] > 0) {
                             $unitCost = $calculatedBaseUnitCost * $unitData['conversion_factor'];
                             ProductUnitPrice::create([
+                                'item_id' => $item->id,
+                                'unit_name' => $unitData['unit_name'],
+                                'selling_price' => $unitData['selling_price'],
+                                'purchase_price' => $unitCost,
+                            ]);
+
+                            ProductUnitBarPrice::create([
+                                'bar_id' => $request->bar_id,
                                 'item_id' => $item->id,
                                 'unit_name' => $unitData['unit_name'],
                                 'selling_price' => $unitData['selling_price'],
@@ -1219,20 +1264,29 @@ class StockEntryController extends Controller
             $query->where('bar_id', $barId);
         }, 'productUnits.price', 'purchaseHistory'])->findOrFail($itemId);
 
+        // Bar-specific overrides for this bar - take priority over the global
+        // default below so the edit form pre-fills THIS bar's actual price.
+        $barUnitPrices = ProductUnitBarPrice::where('bar_id', $barId)
+            ->where('item_id', $item->id)
+            ->get()
+            ->keyBy(fn ($p) => strtolower($p->unit_name));
+
         // Format product units with their prices
-        $productUnits = $item->productUnits->map(function($unit) {
+        $productUnits = $item->productUnits->map(function($unit) use ($barUnitPrices) {
+            $price = $barUnitPrices->get(strtolower($unit->unit_name)) ?? $unit->price;
+
             return [
                 'id' => $unit->id,
                 'item_id' => $unit->item_id,
                 'unit_name' => $unit->unit_name,
                 'conversion_factor' => $unit->conversion_factor,
                 'is_base_unit' => $unit->is_base_unit,
-                'price' => $unit->price ? [
-                    'id' => $unit->price->id,
-                    'item_id' => $unit->price->item_id,
-                    'unit_name' => $unit->price->unit_name,
-                    'selling_price' => $unit->price->selling_price,
-                    'purchase_price' => $unit->price->purchase_price,
+                'price' => $price ? [
+                    'id' => $price->id,
+                    'item_id' => $unit->item_id,
+                    'unit_name' => $unit->unit_name,
+                    'selling_price' => $price->selling_price,
+                    'purchase_price' => $price->purchase_price,
                 ] : null,
             ];
         })->toArray();
@@ -1242,7 +1296,7 @@ class StockEntryController extends Controller
 
         return response()->json([
             'id' => $item->id,
-            'name' => $item->name,
+            'name' => $item->displayNameForBar($barId),
             'category' => $item->category,
             'description' => $item->description,
             'expiry_date' => $item->expiry_date ? $item->expiry_date->format('Y-m-d') : null,
@@ -1283,14 +1337,20 @@ class StockEntryController extends Controller
         
         try {
             $item = Item::findOrFail($itemId);
-            
-            // Update the item basic info
+
+            // Update the item basic info - name is intentionally excluded
+            // here; it's a per-bar display override (see below), so renaming
+            // through this bar's edit form never changes what other bars see.
             $item->update([
-                'name' => $request->name,
                 'category' => $request->category,
                 'description' => $request->description,
                 'expiry_date' => $request->expiry_date,
             ]);
+
+            ItemBarName::updateOrCreate(
+                ['bar_id' => $request->bar_id, 'item_id' => $item->id],
+                ['name' => $request->name]
+            );
 
             // Update or create bar item price
             BarItemPrice::updateOrCreate(
@@ -1313,9 +1373,19 @@ class StockEntryController extends Controller
                 ]);
             }
 
-            // Update base unit price
-            ProductUnitPrice::updateOrCreate(
+            // Seed the global default only if missing - this action is scoped
+            // to one bar, so the actual price change belongs on the per-bar
+            // override below, never on the row every other bar falls back to.
+            ProductUnitPrice::firstOrCreate(
                 ['item_id' => $item->id, 'unit_name' => $request->base_unit],
+                [
+                    'selling_price' => $request->base_unit_selling_price,
+                    'purchase_price' => $item->average_unit_cost ?? 0,
+                ]
+            );
+
+            ProductUnitBarPrice::updateOrCreate(
+                ['bar_id' => $request->bar_id, 'item_id' => $item->id, 'unit_name' => $request->base_unit],
                 [
                     'selling_price' => $request->base_unit_selling_price,
                     'purchase_price' => $item->average_unit_cost ?? 0,
@@ -1326,11 +1396,16 @@ class StockEntryController extends Controller
             ProductUnit::where('item_id', $item->id)
                 ->where('is_base_unit', false)
                 ->delete();
-            
+
             ProductUnitPrice::where('item_id', $item->id)
                 ->where('unit_name', '!=', $request->base_unit)
                 ->delete();
-            
+
+            ProductUnitBarPrice::where('bar_id', $request->bar_id)
+                ->where('item_id', $item->id)
+                ->where('unit_name', '!=', $request->base_unit)
+                ->delete();
+
             // Create new additional units
             if ($request->has('additional_units') && is_array($request->additional_units)) {
                 foreach ($request->additional_units as $unitData) {
@@ -1346,6 +1421,14 @@ class StockEntryController extends Controller
                         if (isset($unitData['selling_price']) && $unitData['selling_price'] > 0) {
                             $unitCost = ($item->average_unit_cost ?? 0) * $unitData['conversion_factor'];
                             ProductUnitPrice::create([
+                                'item_id' => $item->id,
+                                'unit_name' => $unitData['unit_name'],
+                                'selling_price' => $unitData['selling_price'],
+                                'purchase_price' => $unitCost,
+                            ]);
+
+                            ProductUnitBarPrice::create([
+                                'bar_id' => $request->bar_id,
                                 'item_id' => $item->id,
                                 'unit_name' => $unitData['unit_name'],
                                 'selling_price' => $unitData['selling_price'],
@@ -1385,7 +1468,9 @@ class StockEntryController extends Controller
             // Delete related units and prices
             ProductUnit::where('item_id', $itemId)->delete();
             ProductUnitPrice::where('item_id', $itemId)->delete();
-            
+            ProductUnitBarPrice::where('item_id', $itemId)->delete();
+            ItemBarName::where('item_id', $itemId)->delete();
+
             // Delete related ledger entries
             InventoryLedger::where('item_id', $itemId)->delete();
             
@@ -1618,11 +1703,24 @@ class StockEntryController extends Controller
                                 $barPrice = $wunit->barPrices()->where('bar_id', $transferRequest->bar_id)->first();
                                 $sellingPrice = $barPrice ? $barPrice->selling_price : ($warehouseStock->selling_price ? $warehouseStock->selling_price * ($wunit->conversion_factor ?? 1) : null);
                                 if ($sellingPrice !== null) {
+                                    $unitPurchasePrice = $wunit->purchase_price ?? ($warehouseStock->purchase_price * ($wunit->conversion_factor ?? 1));
+
                                     \App\Models\ProductUnitPrice::create([
                                         'item_id' => $item->id,
                                         'unit_name' => $wunit->unit_name,
                                         'selling_price' => $sellingPrice,
-                                        'purchase_price' => $wunit->purchase_price ?? ($warehouseStock->purchase_price * ($wunit->conversion_factor ?? 1)),
+                                        'purchase_price' => $unitPurchasePrice,
+                                    ]);
+
+                                    // Pin this transfer's own bar to its actual price too, so
+                                    // it isn't just riding the global default that whichever
+                                    // bar transfers this item first happens to seed.
+                                    \App\Models\ProductUnitBarPrice::create([
+                                        'bar_id' => $transferRequest->bar_id,
+                                        'item_id' => $item->id,
+                                        'unit_name' => $wunit->unit_name,
+                                        'selling_price' => $sellingPrice,
+                                        'purchase_price' => $unitPurchasePrice,
                                     ]);
                                 }
                             } catch (\Exception $e) {
@@ -1671,14 +1769,70 @@ class StockEntryController extends Controller
  */
 private function itemsForBar(int $barId)
 {
-    return Item::with('productUnits')
+    $items = Item::with(['productUnits', 'barNames' => fn ($q) => $q->where('bar_id', $barId)])
         ->where('is_hidden', false)
         ->where(function ($query) use ($barId) {
             $query->whereHas('barItemPrices', fn ($q) => $q->where('bar_id', $barId))
                 ->orWhereHas('stockEntryItems.stockEntry', fn ($q) => $q->where('bar_id', $barId));
         })
-        ->orderBy('id')
         ->get();
+
+    $firstAdded = $this->firstAddedDatesForBars($items->pluck('id')->all(), [$barId]);
+
+    return $items->sortBy(function ($item) use ($barId, $firstAdded) {
+        return $firstAdded->get($barId . '_' . $item->id) ?? $item->created_at;
+    })->values();
+}
+
+/**
+ * When each item was first added to each bar, keyed by "bar_id_item_id" -
+ * the earlier of its BarItemPrice row (created once, on the first Add/Edit
+ * Stock for that bar, and never touched again by later price edits) and its
+ * earliest StockEntryItem (for items that arrived some other way, e.g. an
+ * approved warehouse transfer). Used purely to order each bar's item list by
+ * when it actually joined that bar - a plain catalog id/created_at would
+ * instead reflect whichever bar first stocked that catalog item, which is
+ * wrong once other bars start stocking the same shared item later.
+ */
+private function firstAddedDatesForBars(array $itemIds, array $barIds): \Illuminate\Support\Collection
+{
+    if (empty($itemIds) || empty($barIds)) {
+        return collect();
+    }
+
+    $barItemDates = BarItemPrice::whereIn('bar_id', $barIds)
+        ->whereIn('item_id', $itemIds)
+        ->get(['bar_id', 'item_id', 'created_at'])
+        ->keyBy(fn ($p) => $p->bar_id . '_' . $p->item_id)
+        ->map(fn ($p) => $p->created_at);
+
+    $stockEntryDates = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
+        ->whereIn('sales.bar_id', $barIds)
+        ->whereIn('stock_entry_items.item_id', $itemIds)
+        ->groupBy('sales.bar_id', 'stock_entry_items.item_id')
+        ->select('sales.bar_id', 'stock_entry_items.item_id', DB::raw('MIN(stock_entry_items.created_at) as first_seen'))
+        ->get()
+        ->keyBy(fn ($r) => $r->bar_id . '_' . $r->item_id)
+        ->map(fn ($r) => $r->first_seen);
+
+    return $barItemDates->keys()->merge($stockEntryDates->keys())
+        ->unique()
+        ->mapWithKeys(function ($key) use ($barItemDates, $stockEntryDates) {
+            $candidates = array_filter([$barItemDates->get($key), $stockEntryDates->get($key)]);
+            return [$key => empty($candidates) ? null : min($candidates)];
+        });
+}
+
+/**
+ * Resolve each item's display name for a specific bar, keyed by item_id -
+ * a bar's own override if it renamed the item, otherwise the shared
+ * catalog name. Used wherever a single bar's item list is rendered.
+ */
+private function displayNamesForBar(array $itemIds, int $barId): \Illuminate\Support\Collection
+{
+    return ItemBarName::where('bar_id', $barId)
+        ->whereIn('item_id', $itemIds)
+        ->pluck('name', 'item_id');
 }
 
 private function getApprovedOrderQuantities(int $barId, string $date): array
@@ -1957,6 +2111,15 @@ private function upgradeLegacyShotStockFigures(
             ->where('item_id', $item->id)
             ->first();
 
+        // Per-bar per-unit overrides - what a director sets for THIS bar via
+        // Add/Edit/Restock Stock. Must win over the global default below,
+        // otherwise a price change for one bar leaks into every other bar
+        // that has never had its own override set.
+        $barUnitPrices = ProductUnitBarPrice::where('bar_id', $barId)
+            ->where('item_id', $item->id)
+            ->get()
+            ->keyBy(fn ($p) => strtolower($p->unit_name));
+
         // Pre-load all ProductUnitPrice records for this item so we don't
         // hit the database once per unit inside the loop.
         $unitPrices = ProductUnitPrice::where('item_id', $item->id)
@@ -1967,27 +2130,31 @@ private function upgradeLegacyShotStockFigures(
             $price = null;
             $unitKey = strtolower($unit->unit_name);
 
-            // Priority 1: Per-unit price from ProductUnitPrice (most specific —
-            // this is what the director sets when defining each selling unit,
-            // so it must win to show the correct price per Bottle vs Shot).
-            if ($unitPrices->has($unitKey)) {
+            // Priority 1: Per-bar per-unit override - the most specific price,
+            // scoped to this bar only.
+            if ($barUnitPrices->has($unitKey)) {
+                $price = $barUnitPrices->get($unitKey);
+            }
+            // Priority 2: Per-unit price from ProductUnitPrice (global default -
+            // used until this bar gets its own override set).
+            elseif ($unitPrices->has($unitKey)) {
                 $price = $unitPrices->get($unitKey);
             }
-            // Priority 2: Bar-level price (legacy single-price override)
+            // Priority 3: Bar-level price (legacy single-price override)
             elseif ($barItemPrice && $barItemPrice->price > 0) {
                 $price = (object) [
                     'selling_price' => $barItemPrice->price,
                     'purchase_price' => $item->average_unit_cost ?? 0,
                 ];
             }
-            // Priority 3: Item's base price
+            // Priority 4: Item's base price
             elseif ($item->price > 0) {
                 $price = (object) [
                     'selling_price' => $item->price,
                     'purchase_price' => $item->average_unit_cost ?? 0,
                 ];
             }
-            // Priority 4: Zero fallback
+            // Priority 5: Zero fallback
             else {
                 $price = (object) [
                     'selling_price' => 0,
@@ -2056,20 +2223,31 @@ private function upgradeLegacyShotStockFigures(
                 return back()->with('error', 'Item or bar not found');
             }
 
-            // Guard against renaming into an existing different item's name -
-            // "name" is used as a lookup key elsewhere (Add Stock, warehouse
-            // transfers), so two items sharing a name would make those
-            // lookups pick whichever one happens to come back first.
-            if ($itemName !== '' && strcasecmp($itemName, $item->name) !== 0) {
-                $duplicate = Item::where('id', '!=', $item->id)
-                    ->whereRaw('LOWER(name) = ?', [strtolower($itemName)])
-                    ->exists();
+            // The item's display name is per-bar (a director can call the same
+            // catalog item something different at each bar), so "old name" and
+            // the duplicate check below are both scoped to THIS bar, not the
+            // shared catalog name (which never changes here anymore - it stays
+            // stable for warehouse-transfer matching and Add Stock's lookup).
+            $oldDisplayName = $item->displayNameForBar($bar->id);
+
+            // Guard against renaming into a name another item already displays
+            // at THIS bar - two items showing the same name at one bar would
+            // be confusing even though their underlying item_id still differs.
+            if ($itemName !== '' && strcasecmp($itemName, $oldDisplayName) !== 0) {
+                $barOverrideNames = ItemBarName::where('bar_id', $bar->id)
+                    ->where('item_id', '!=', $item->id)
+                    ->pluck('name', 'item_id');
+
+                $duplicate = $barOverrideNames->contains(fn ($n) => strcasecmp($n, $itemName) === 0)
+                    || Item::where('id', '!=', $item->id)
+                        ->whereNotIn('id', $barOverrideNames->keys())
+                        ->whereRaw('LOWER(name) = ?', [strtolower($itemName)])
+                        ->exists();
+
                 if ($duplicate) {
-                    return back()->with('error', "Another item is already named \"{$itemName}\". Choose a different name.");
+                    return back()->with('error', "Another item is already named \"{$itemName}\" at {$bar->name}. Choose a different name.");
                 }
             }
-
-            $oldName = $item->name;
 
             // Identify the base unit (first row, or the one flagged is_base=1)
             $baseUnitIndex = 0;
@@ -2086,12 +2264,11 @@ private function upgradeLegacyShotStockFigures(
             $oldStock = $item->director_stock;
             $oldPrice = $item->price;
 
-            // Update item master data
+            // Update item master data - name is intentionally NOT set here
+            // anymore; it's written per-bar below via ItemBarName so renaming
+            // at one bar never changes what other bars display.
             $item->director_stock = $newStock;
             $item->price = $baseSellingPrice;
-            if ($itemName !== '') {
-                $item->name = $itemName;
-            }
             if (!empty($category)) {
                 $item->category = $category;
             }
@@ -2175,6 +2352,15 @@ private function upgradeLegacyShotStockFigures(
                 ]
             );
 
+            // The display name change for this bar only - never touches the
+            // shared catalog name other bars (and warehouse matching) rely on.
+            if ($itemName !== '') {
+                ItemBarName::updateOrCreate(
+                    ['bar_id' => $bar->id, 'item_id' => $item->id],
+                    ['name' => $itemName]
+                );
+            }
+
             // Update product units and their prices
             foreach ($units as $i => $unitData) {
                 $isBase = ($i === $baseUnitIndex);
@@ -2191,8 +2377,28 @@ private function upgradeLegacyShotStockFigures(
                     ]
                 );
 
-                ProductUnitPrice::updateOrCreate(
+                // Seed the global default only if this unit has never had one
+                // (e.g. a brand new unit type for this item) - it exists so a
+                // bar that has never priced this unit still has a starting
+                // point. Never overwrite it here: this action is scoped to one
+                // bar, so the actual price change must go to the per-bar
+                // override below, not the row every other bar falls back to.
+                ProductUnitPrice::firstOrCreate(
                     [
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                    ],
+                    [
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]
+                );
+
+                // The actual price change for this bar - scoped to $bar->id so
+                // it never affects what other bars see for this item/unit.
+                ProductUnitBarPrice::updateOrCreate(
+                    [
+                        'bar_id' => $bar->id,
                         'item_id' => $item->id,
                         'unit_name' => $unitData['unit_name'],
                     ],
@@ -2211,12 +2417,17 @@ private function upgradeLegacyShotStockFigures(
             ProductUnitPrice::where('item_id', $item->id)
                 ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
                 ->delete();
+            ProductUnitBarPrice::where('bar_id', $bar->id)
+                ->where('item_id', $item->id)
+                ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
+                ->delete();
 
-            // Sync with warehouse - looked up by the OLD name (that's what's
-            // still stored there), then renamed to match if the item was
-            // renamed - delete warehouse unit bar prices so BarItemPrice
+            // Sync with warehouse - looked up by the item's shared catalog
+            // name, which no longer changes here (renaming is per-bar only,
+            // so the warehouse link that other bars' transfers rely on must
+            // stay stable) - delete warehouse unit bar prices so BarItemPrice
             // takes priority.
-            $warehouseStock = WarehouseStock::where('item_name', $oldName)
+            $warehouseStock = WarehouseStock::where('item_name', $item->name)
                 ->with(['units.barPrices'])
                 ->first();
 
@@ -2224,9 +2435,6 @@ private function upgradeLegacyShotStockFigures(
                 $warehouseStock->selling_price = $baseSellingPrice;
                 if ($basePurchasePrice > 0) {
                     $warehouseStock->purchase_price = $basePurchasePrice;
-                }
-                if ($itemName !== '' && $itemName !== $oldName) {
-                    $warehouseStock->item_name = $itemName;
                 }
                 $warehouseStock->save();
 
@@ -2243,15 +2451,16 @@ private function upgradeLegacyShotStockFigures(
 
             // Log the activity
             $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
-            $renamed = $oldName !== $item->name;
-            $renameNote = $renamed ? " Renamed from \"{$oldName}\" to \"{$item->name}\"." : '';
+            $newDisplayName = $itemName !== '' ? $itemName : $oldDisplayName;
+            $renamed = strcasecmp($oldDisplayName, $newDisplayName) !== 0;
+            $renameNote = $renamed ? " Renamed from \"{$oldDisplayName}\" to \"{$newDisplayName}\" at {$bar->name}." : '';
             ActivityLog::log([
                 'action' => 'stock_updated',
-                'description' => "Updated stock for {$item->name} at {$bar->name} from {$oldStock} to {$newStock} and price from {$oldPrice} to {$baseSellingPrice}.{$renameNote} Units: {$unitSummary}",
+                'description' => "Updated stock for {$newDisplayName} at {$bar->name} from {$oldStock} to {$newStock} and price from {$oldPrice} to {$baseSellingPrice}.{$renameNote} Units: {$unitSummary}",
                 'subject_type' => Item::class,
                 'subject_id' => $item->id,
-                'old_values' => ['stock' => $oldStock, 'bar' => $bar->name, 'price' => $oldPrice, 'name' => $oldName],
-                'new_values' => ['stock' => $newStock, 'bar' => $bar->name, 'price' => $baseSellingPrice, 'name' => $item->name, 'units' => $units],
+                'old_values' => ['stock' => $oldStock, 'bar' => $bar->name, 'price' => $oldPrice, 'name' => $oldDisplayName],
+                'new_values' => ['stock' => $newStock, 'bar' => $bar->name, 'price' => $baseSellingPrice, 'name' => $newDisplayName, 'units' => $units],
             ]);
 
             DB::commit();
@@ -2340,6 +2549,14 @@ private function upgradeLegacyShotStockFigures(
                         'selling_price' => (float) $unitData['selling_price'],
                         'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
                     ]);
+
+                    ProductUnitBarPrice::create([
+                        'bar_id' => $barId,
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]);
                 }
             } else {
                 $item->director_stock = max($item->director_stock, $stockQuantity);
@@ -2355,9 +2572,11 @@ private function upgradeLegacyShotStockFigures(
                 foreach ($units as $i => $unitData) {
                     $unitNameLower = strtolower($unitData['unit_name']);
                     if (in_array($unitNameLower, $existingUnits)) {
-                        // Update existing price
-                        ProductUnitPrice::updateOrCreate(
-                            ['item_id' => $item->id, 'unit_name' => $unitData['unit_name']],
+                        // This bar's price for this existing unit - scoped to
+                        // $barId so restocking it here never changes what
+                        // other bars see for the same item/unit.
+                        ProductUnitBarPrice::updateOrCreate(
+                            ['bar_id' => $barId, 'item_id' => $item->id, 'unit_name' => $unitData['unit_name']],
                             [
                                 'selling_price' => (float) $unitData['selling_price'],
                                 'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
@@ -2377,6 +2596,14 @@ private function upgradeLegacyShotStockFigures(
                     ]);
 
                     ProductUnitPrice::create([
+                        'item_id' => $item->id,
+                        'unit_name' => $unitData['unit_name'],
+                        'selling_price' => (float) $unitData['selling_price'],
+                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
+                    ]);
+
+                    ProductUnitBarPrice::create([
+                        'bar_id' => $barId,
                         'item_id' => $item->id,
                         'unit_name' => $unitData['unit_name'],
                         'selling_price' => (float) $unitData['selling_price'],
@@ -2576,7 +2803,17 @@ private function upgradeLegacyShotStockFigures(
                 ['price' => $price]
             );
 
-            ProductUnitPrice::where('item_id', $item->id)->update(['selling_price' => $price]);
+            // Restocking only carries the base unit's price, and only for this
+            // bar - previously this blasted every unit of the item to the same
+            // price across every bar, which both mixed up e.g. Bottle/Shot
+            // pricing and leaked the change into bars that weren't restocked.
+            $baseUnitName = $item->baseUnit?->unit_name;
+            if ($baseUnitName) {
+                ProductUnitBarPrice::updateOrCreate(
+                    ['bar_id' => $bar->id, 'item_id' => $item->id, 'unit_name' => $baseUnitName],
+                    ['selling_price' => $price]
+                );
+            }
 
             // Log activity
             ActivityLog::log([
@@ -2606,17 +2843,23 @@ private function upgradeLegacyShotStockFigures(
             abort(403);
         }
 
+        $itemId = $request->query('item_id');
+        $barId = $request->query('bar_id');
         $itemName = $request->query('item');
         $barName = $request->query('bar');
 
-        if (!$itemName || !$barName) {
+        if ((!$itemId || !$barId) && (!$itemName || !$barName)) {
             return back()->with('error', 'Missing item or bar information');
         }
 
         DB::beginTransaction();
         try {
-            $item = Item::where('name', $itemName)->first();
-            $bar = Bar::where('name', $barName)->first();
+            // Prefer looking up by ID - names are per-bar now (a director can
+            // rename the same catalog item differently at each bar), so the
+            // display name shown on this row may no longer match the item's
+            // shared catalog name and can no longer be trusted as a lookup key.
+            $item = $itemId ? Item::find($itemId) : Item::where('name', $itemName)->first();
+            $bar = $barId ? Bar::find($barId) : Bar::where('name', $barName)->first();
 
             if (!$item || !$bar) {
                 return back()->with('error', 'Item or bar not found');
@@ -2644,13 +2887,14 @@ private function upgradeLegacyShotStockFigures(
                 ]);
             }
 
-            // Hide the item so it is removed from the seller UI and the director's
-            // stock overview. Historical records are preserved (the item row is not
-            // deleted), keeping past reports and reconciliations intact.
-            $item->is_hidden = true;
-            $item->save();
-
-            // Delete bar item price
+            // Deleting the bar's price row above (and the stock entry items
+            // deleted earlier in this method) already removes the item from
+            // THIS bar's seller UI and stock overview - itemsForBar() only
+            // shows an item once it has a BarItemPrice or a StockEntryItem for
+            // that specific bar. Note this deliberately does NOT set the
+            // item's global is_hidden flag: that field has no bar_id, so
+            // setting it here would hide the item from every other bar too,
+            // even though this delete only targets one bar.
             BarItemPrice::where('bar_id', $bar->id)
                 ->where('item_id', $item->id)
                 ->delete();

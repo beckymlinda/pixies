@@ -39,6 +39,31 @@ class Item extends Model
         return $this->hasMany(BarItemPrice::class);
     }
 
+    public function barNames(): HasMany
+    {
+        return $this->hasMany(ItemBarName::class);
+    }
+
+    /**
+     * The name to display for this item at a given bar - a bar's own
+     * override if it has renamed this item, otherwise the shared catalog
+     * name used for warehouse/transfer matching and reporting.
+     */
+    public function displayNameForBar(?int $barId): string
+    {
+        if ($barId) {
+            $override = $this->relationLoaded('barNames')
+                ? $this->barNames->firstWhere('bar_id', $barId)
+                : $this->barNames()->where('bar_id', $barId)->first();
+
+            if ($override) {
+                return $override->name;
+            }
+        }
+
+        return $this->name;
+    }
+
     public function stockEntryItems()
     {
         return $this->hasMany(StockEntryItem::class);

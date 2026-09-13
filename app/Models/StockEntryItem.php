@@ -88,7 +88,8 @@ class StockEntryItem extends Model
         // Use unit price if unit_name is set, otherwise use default price
         if ($this->unit_name && $this->item_id) {
             $inventoryService = new InventoryService();
-            $unitPrice = $inventoryService->getUnitPrice($this->item_id, $this->unit_name);
+            $barId = $this->stock_entry_id ? $this->stockEntry?->bar_id : null;
+            $unitPrice = $inventoryService->getUnitPrice($this->item_id, $this->unit_name, $barId);
             if ($unitPrice) {
                 $this->attributes['sales_amount'] = $this->sold_quantity * $unitPrice->selling_price;
                 return;

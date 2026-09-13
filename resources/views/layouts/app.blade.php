@@ -98,6 +98,39 @@
                 border-left-color: #3b82f6;
             }
 
+            .sidebar-nav-link[data-bs-toggle="collapse"] .bi-chevron-down {
+                transition: transform 0.2s;
+                font-size: 0.75rem;
+                margin-right: 0;
+            }
+
+            .sidebar-nav-link[data-bs-toggle="collapse"][aria-expanded="true"] .bi-chevron-down {
+                transform: rotate(180deg);
+            }
+
+            .sidebar-sublink {
+                display: flex;
+                align-items: center;
+                padding: 0.6rem 1.5rem 0.6rem 3rem;
+                color: rgba(255, 255, 255, 0.55);
+                text-decoration: none;
+                font-weight: 500;
+                font-size: 0.85rem;
+                border-left: 3px solid transparent;
+                transition: all 0.2s;
+            }
+
+            .sidebar-sublink:hover {
+                color: white;
+                background: rgba(255, 255, 255, 0.05);
+            }
+
+            .sidebar-sublink.active {
+                color: white;
+                background: rgba(59, 130, 246, 0.1);
+                border-left-color: #3b82f6;
+            }
+
             /* Main Area */
             #main-wrapper {
                 margin-left: var(--sidebar-width);
@@ -228,9 +261,24 @@
                     <a href="{{ auth()->user()->isDirector() ? route('director.dashboard') : route('manager.dashboard') }}" class="sidebar-nav-link {{ request()->routeIs(auth()->user()->isDirector() ? 'director.dashboard' : 'manager.dashboard') ? 'active' : '' }}">
                         <i class="bi bi-grid-1x2"></i> {{ auth()->user()->isDirector() ? 'Executive Overview' : 'Dashboard' }}
                     </a>
-                    <a href="{{ route('stock.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock.*') ? 'active' : '' }}">
-                        <i class="bi bi-box-seam"></i> Stock
+                    @php
+                        $stockBars = \App\Models\Bar::listed()->orderBy('name')->get();
+                        $activeStockBarId = request()->routeIs('stock.*') ? (int) request('bar_id') : null;
+                    @endphp
+                    <a href="#stockBarsSubmenu" class="sidebar-nav-link d-flex justify-content-between align-items-center {{ request()->routeIs('stock.*') ? 'active' : '' }}" data-bs-toggle="collapse" role="button" aria-expanded="{{ request()->routeIs('stock.*') ? 'true' : 'false' }}" aria-controls="stockBarsSubmenu">
+                        <span><i class="bi bi-box-seam"></i> Stock</span>
+                        <i class="bi bi-chevron-down"></i>
                     </a>
+                    <div class="collapse {{ request()->routeIs('stock.*') ? 'show' : '' }}" id="stockBarsSubmenu">
+                        <a href="{{ route('stock.index') }}" class="sidebar-sublink {{ request()->routeIs('stock.*') && !$activeStockBarId ? 'active' : '' }}">
+                            All Bars
+                        </a>
+                        @foreach($stockBars as $stockBar)
+                            <a href="{{ route('stock.index', ['bar_id' => $stockBar->id]) }}" class="sidebar-sublink {{ $activeStockBarId === $stockBar->id ? 'active' : '' }}">
+                                {{ $stockBar->name }}
+                            </a>
+                        @endforeach
+                    </div>
                     @php
                         $directorTodayCastel = \App\Models\BottleCount::whereDate('date', now()->toDateString())->sum('counted');
                     @endphp

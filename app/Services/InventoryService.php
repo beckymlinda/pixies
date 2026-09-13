@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\ProductUnit;
 use App\Models\ProductUnitPrice;
+use App\Models\ProductUnitBarPrice;
 use App\Models\Item;
 use App\Models\WarehouseStock;
 
@@ -218,14 +219,27 @@ class InventoryService
     }
 
     /**
-     * Get price for a specific unit.
-     * 
+     * Get price for a specific unit. When $barId is given, a per-bar override
+     * (set via Add/Edit/Restock Stock for that bar) takes priority over the
+     * global default, so one bar's price never leaks into another bar's sales.
+     *
      * @param int $itemId
      * @param string $unitName
-     * @return ProductUnitPrice|null
+     * @param int|null $barId
+     * @return ProductUnitPrice|ProductUnitBarPrice|null
      */
-    public function getUnitPrice(int $itemId, string $unitName): ?ProductUnitPrice
+    public function getUnitPrice(int $itemId, string $unitName, ?int $barId = null)
     {
+        if ($barId) {
+            $barPrice = ProductUnitBarPrice::where('bar_id', $barId)
+                ->where('item_id', $itemId)
+                ->where('unit_name', $unitName)
+                ->first();
+            if ($barPrice) {
+                return $barPrice;
+            }
+        }
+
         return ProductUnitPrice::where('item_id', $itemId)
             ->where('unit_name', $unitName)
             ->first();
