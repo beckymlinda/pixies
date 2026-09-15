@@ -91,11 +91,11 @@
                     <table class="table table-hover mb-0">
                         <thead class="bg-light border-bottom">
                             <tr>
+                                <th class="border-0 text-uppercase text-muted small">#</th>
                                 <th class="border-0 text-uppercase text-muted small">Bar</th>
                                 <th class="border-0 text-uppercase text-muted small">Item</th>
                                 <th class="border-0 text-uppercase text-muted small">Category</th>
                                 <th class="border-0 text-uppercase text-muted small">Stock</th>
-                                <th class="border-0 text-uppercase text-muted small">Unit</th>
                                 <th class="border-0 text-uppercase text-muted small">Purchase Price</th>
                                 <th class="border-0 text-uppercase text-muted small">Selling Price</th>
                                 <th class="border-0 text-uppercase text-muted small">Markup</th>
@@ -108,6 +108,7 @@
                         <tbody>
                             @forelse($stockRows as $row)
                                 <tr>
+                                    <td class="align-middle text-muted">{{ $loop->iteration }}</td>
                                     <td class="align-middle fw-semibold">{{ $row['bar_name'] }}</td>
                                     <td class="align-middle fw-bold text-dark">{{ $row['item_name'] }}</td>
                                     <td class="align-middle text-capitalize"><span class="badge bg-secondary bg-opacity-10 text-dark border-0 px-2 py-1">{{ $row['category'] }}</span></td>
@@ -121,7 +122,6 @@
                                             <span class="fw-bold">{{ number_format($row['stock']) }}</span>
                                         @endif
                                     </td>
-                                    <td class="align-middle text-capitalize">{{ $row['unit'] }}</td>
                                     <td class="align-middle fw-semibold">MWK {{ number_format($row['price'], 2) }}</td>
                                     <td class="align-middle fw-semibold">MWK {{ number_format($row['selling_price'], 2) }}</td>
                                     <td class="align-middle fw-semibold">
@@ -150,7 +150,7 @@
                                 </tr>
                             @empty
                                 <tr>
-                                    <td colspan="7" class="text-center py-5">
+                                    <td colspan="{{ $canManageStock ? 10 : 9 }}" class="text-center py-5">
                                         <div class="opacity-25 display-4 mb-3">📦</div>
                                         <p class="text-muted mb-0">No stock records available for this selection.</p>
                                     </td>

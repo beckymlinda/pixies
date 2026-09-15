@@ -834,10 +834,10 @@ class StockEntryController extends Controller
         $search = trim($request->query('search', ''));
         $bars = Bar::listed()->orderBy('name')->get();
 
+        $barIds = $selectedBarId ? [(int) $selectedBarId] : $bars->pluck('id')->all();
+
         $stockEntries = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
-            ->when($selectedBarId, function ($query) use ($selectedBarId) {
-                $query->where('sales.bar_id', $selectedBarId);
-            })
+            ->whereIn('sales.bar_id', $barIds)
             ->orderBy('sales.date', 'desc')
             ->orderBy('stock_entry_items.updated_at', 'desc')
             ->orderBy('stock_entry_items.id', 'desc')
@@ -851,8 +851,28 @@ class StockEntryController extends Controller
             return $row->bar_id . '_' . $row->item_id;
         })->map->first()->values();
 
+        // itemsForBar() (the seller Sell page) shows an item once it has
+        // EITHER a BarItemPrice OR a StockEntryItem for that bar. This query
+        // only had the StockEntryItem side, so an item added via the item
+        // management modal (which sets a BarItemPrice but never touches a
+        // daily sheet) would appear on the seller's Sell page but never here
+        // - add a zero-stock row for any such pair so both views agree on
+        // what "belongs to this bar" means.
+        $coveredPairs = $latestStocks->map(fn ($s) => $s->bar_id . '_' . $s->item_id)->flip();
+        $syntheticStocks = BarItemPrice::whereIn('bar_id', $barIds)
+            ->get()
+            ->reject(fn ($p) => $coveredPairs->has($p->bar_id . '_' . $p->item_id))
+            ->map(fn ($p) => (object) [
+                'bar_id' => $p->bar_id,
+                'item_id' => $p->item_id,
+                'closing_stock' => 0,
+                'purchase_price' => 0,
+                'stock_date' => $p->created_at,
+            ]);
+
+        $latestStocks = $latestStocks->concat($syntheticStocks);
+
         $itemIds = $latestStocks->pluck('item_id')->unique()->all();
-        $barIds = $latestStocks->pluck('bar_id')->unique()->all();
 
         $items = Item::with(['productUnits'])->where('is_hidden', false)->whereIn('id', $itemIds)->get()->keyBy('id');
         $barNames = Bar::whereIn('id', $barIds)->pluck('name', 'id');
