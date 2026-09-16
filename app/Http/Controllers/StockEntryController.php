@@ -1677,15 +1677,22 @@ private function upgradeLegacyShotStockFigures(
 
     /**
      * Query params to redirect back to the Stock Overview page with whatever
-     * bar/search filter was active before the action was submitted, instead
-     * of always resetting to "All Bars" - carried through each action form
-     * as hidden filter_bar_id / filter_search fields.
+     * bar filter was active before the action was submitted, instead of
+     * always resetting to "All Bars" - carried through each action form as a
+     * hidden filter_bar_id field.
+     *
+     * Deliberately does NOT carry the search term back: it's baked into each
+     * modal's hidden filter_search field at page-LOAD time, not kept in sync
+     * with the live search box, so reapplying it after an action can hide
+     * the very item that action just touched - e.g. searching "Greenwich" to
+     * confirm it saved, then (without clearing the search) adding "Green",
+     * would otherwise redirect back into a "Greenwich" filter that silently
+     * excludes "Green" from the list even though it saved correctly.
      */
     private function stockIndexRedirectParams(Request $request): array
     {
         return array_filter([
             'bar_id' => $request->input('filter_bar_id'),
-            'search' => $request->input('filter_search'),
         ], fn ($value) => $value !== null && $value !== '');
     }
 
@@ -1987,8 +1994,24 @@ private function upgradeLegacyShotStockFigures(
 
             $bar = Bar::find($barId);
 
-            // Find existing item by name or create a new one
-            $item = Item::where('name', $itemName)->first();
+            // Match against what's actually VISIBLE at this bar - its own
+            // rename override if it has one for another item's catalog slot,
+            // otherwise the shared catalog name. A plain Item::where('name',
+            // ...) lookup would also match an item whose catalog name is
+            // "gin" but has since been renamed to something else at every
+            // bar (via Edit Stock) - that name is invisible everywhere now,
+            // so typing it here should create a genuinely new item, not
+            // silently attach to the hidden one and show no visible change.
+            $barOverrideNames = ItemBarName::where('bar_id', $barId)->pluck('name', 'item_id');
+            $overrideMatchId = $barOverrideNames->search(fn ($n) => strcasecmp($n, $itemName) === 0);
+
+            if ($overrideMatchId !== false) {
+                $item = Item::find($overrideMatchId);
+            } else {
+                $item = Item::where('name', $itemName)
+                    ->whereNotIn('id', $barOverrideNames->keys())
+                    ->first();
+            }
             $isNewItem = false;
 
             if (!$item) {
