@@ -26,9 +26,15 @@
                         </div>
                         <div class="d-flex flex-column flex-sm-row gap-2 w-100 w-md-auto">
                             @if($canManageStock)
-                                <button type="button" class="btn btn-success text-nowrap" data-bs-toggle="modal" data-bs-target="#addStockModal">
-                                    <i class="bi bi-plus-circle me-1"></i> Add New Stock
-                                </button>
+                                @if($selectedBarId)
+                                    <button type="button" class="btn btn-success text-nowrap" data-bs-toggle="modal" data-bs-target="#addStockModal">
+                                        <i class="bi bi-plus-circle me-1"></i> Add New Stock
+                                    </button>
+                                @else
+                                    <button type="button" class="btn btn-success text-nowrap" disabled title="Select a bar from the Stock menu in the sidebar first">
+                                        <i class="bi bi-plus-circle me-1"></i> Add New Stock
+                                    </button>
+                                @endif
                             @endif
                             <form method="GET" action="{{ route('stock.index') }}" class="d-flex gap-2 flex-grow-1">
                                 {{-- Bar selection lives in the sidebar's Stock dropdown now - this
@@ -197,6 +203,14 @@
                     <div class="mb-3">
                         <label class="form-label fw-bold">Category</label>
                         <input type="text" name="category" class="form-control" id="editCategory" list="categoryList" placeholder="e.g. Beer, Spirits, Wine...">
+                        <datalist id="categoryList">
+                            <option value="Beer">
+                            <option value="Spirits">
+                            <option value="Wine">
+                            <option value="Soft Drinks">
+                            <option value="Food">
+                            <option value="Other">
+                        </datalist>
                     </div>
                     <div class="mb-3">
                         <label class="form-label fw-bold">New Total Stock Quantity <span class="text-muted fw-normal small">(in the base unit)</span></label>
@@ -236,31 +250,13 @@
             </div>
             <form method="POST" action="{{ route('stock.add') }}" id="addStockForm">
                 @csrf
+                <input type="hidden" name="bar_id" value="{{ $selectedBarId }}">
                 <input type="hidden" name="filter_bar_id" value="{{ $selectedBarId }}">
                 <input type="hidden" name="filter_search" value="{{ $search }}">
                 <div class="modal-body">
-                    <div class="row g-3 mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label fw-bold">Select Bar</label>
-                            <select name="bar_id" class="form-select" required id="barSelect">
-                                <option value="">Choose a bar...</option>
-                                @foreach($bars as $bar)
-                                    <option value="{{ $bar->id }}" {{ count($bars) == 1 ? 'selected' : '' }}>{{ $bar->name }}</option>
-                                @endforeach
-                            </select>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label fw-bold">Category</label>
-                            <input type="text" name="category" class="form-control" list="categoryList" placeholder="e.g. Beer, Spirits, Wine...">
-                            <datalist id="categoryList">
-                                <option value="Beer">
-                                <option value="Spirits">
-                                <option value="Wine">
-                                <option value="Soft Drinks">
-                                <option value="Food">
-                                <option value="Other">
-                            </datalist>
-                        </div>
+                    <div class="alert alert-light border d-flex align-items-center gap-2 mb-3">
+                        <i class="bi bi-geo-alt-fill text-success"></i>
+                        <span>Adding stock to <strong>{{ $bars->firstWhere('id', $selectedBarId)->name ?? 'this bar' }}</strong> — the bar currently selected in the sidebar.</span>
                     </div>
 
                     <div class="mb-3">
