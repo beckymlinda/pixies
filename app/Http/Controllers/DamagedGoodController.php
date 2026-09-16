@@ -30,9 +30,16 @@ class DamagedGoodController extends Controller
             $query->where('bar_id', $request->integer('bar_id'));
         }
 
+        $totalAmount = (float) (clone $query)->sum('amount');
+        $totalCount = (clone $query)->count();
+        $withPhoto = (clone $query)->whereNotNull('photo_path')->count();
+        $thisMonthTotal = (float) (clone $query)
+            ->whereBetween('date', [now()->startOfMonth(), now()->endOfMonth()])
+            ->sum('amount');
+
         $damagedGoods = $query->paginate(15)->withQueryString();
 
-        return view('damaged-goods.index', compact('damagedGoods', 'bars'));
+        return view('damaged-goods.index', compact('damagedGoods', 'bars', 'totalAmount', 'totalCount', 'withPhoto', 'thisMonthTotal'));
     }
 
     /**

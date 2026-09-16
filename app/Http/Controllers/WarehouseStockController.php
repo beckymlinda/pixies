@@ -3,9 +3,6 @@
 namespace App\Http\Controllers;
 
 use App\Models\Bar;
-use App\Models\Item;
-use App\Models\ProductUnit;
-use App\Models\ProductUnitPrice;
 use App\Models\WarehouseStock;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -304,7 +301,6 @@ class WarehouseStockController extends Controller
             );
 
             $this->removeLegacySellingUnits($warehouseStock);
-            $this->syncLinkedItemProductUnits($warehouseStock);
 
             \App\Models\ActivityLog::log([
                 'action' => 'warehouse_stock_added',
@@ -469,7 +465,6 @@ class WarehouseStockController extends Controller
             );
 
             $this->removeLegacySellingUnits($warehouseStock);
-            $this->syncLinkedItemProductUnits($warehouseStock);
 
             DB::commit();
             return redirect()->route('warehouse.index')
@@ -829,8 +824,10 @@ class WarehouseStockController extends Controller
 
         $bar = Bar::findOrFail($barId);
 
-        // Fetch all warehouse stocks with units and their prices for the specified bar
-        $stocks = WarehouseStock::with(['units'])->get();
+        // Fetch all warehouse stocks with units and their prices for the specified
+        // bar, in creation order (oldest first) - consistent with every other
+        // item listing in the app, and not left to an unspecified DB default order.
+        $stocks = WarehouseStock::with(['units'])->orderBy('id')->get();
         
         $items = $stocks->map(function ($stock) use ($barId, $bar) {
             // Find base unit and its bar price
@@ -1044,42 +1041,5 @@ class WarehouseStockController extends Controller
             });
     }
 
-    private function syncLinkedItemProductUnits(WarehouseStock $warehouseStock): void
-    {
-        $item = Item::where('name', $warehouseStock->item_name)->first();
-        if (! $item) {
-            return;
-        }
-
-        $warehouseStock->load('units.barPrices');
-
-        ProductUnitPrice::where('item_id', $item->id)->delete();
-        ProductUnit::where('item_id', $item->id)->delete();
-
-        foreach ($warehouseStock->units as $wUnit) {
-            if (! in_array($wUnit->unit_name, ['Bottle', 'Shot'], true) && ! $wUnit->is_base_unit) {
-                continue;
-            }
-
-            ProductUnit::create([
-                'item_id' => $item->id,
-                'unit_name' => $wUnit->unit_name,
-                'conversion_factor' => $wUnit->conversion_factor,
-                'is_base_unit' => $wUnit->is_base_unit,
-            ]);
-
-            $sellingPrice = $wUnit->barPrices->first()?->selling_price
-                ?? ($warehouseStock->selling_price * ($wUnit->is_base_unit ? 1 : $wUnit->conversion_factor));
-
-            if ($sellingPrice > 0) {
-                ProductUnitPrice::create([
-                    'item_id' => $item->id,
-                    'unit_name' => $wUnit->unit_name,
-                    'selling_price' => $sellingPrice,
-                    'purchase_price' => $wUnit->purchase_price,
-                ]);
-            }
-        }
-    }
 }
 

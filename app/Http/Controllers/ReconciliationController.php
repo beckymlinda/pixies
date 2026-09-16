@@ -179,6 +179,14 @@ class ReconciliationController extends Controller
             $electronicTotal = $stockEntry->payments->sum('amount');
         }
 
+        // Same source/preference as $electronicTotal above (daily report
+        // payments preferred, Payment rows as fallback), just broken out
+        // per method instead of collapsed into one figure.
+        $electronicBreakdown = collect($this->getPaymentBreakdown($stockEntry))
+            ->except(['Cash'])
+            ->filter(fn ($amount) => $amount > 0)
+            ->all();
+
         $totalCollected = $cashInHand + $electronicTotal;
         // Compute expected cash using the same rules as CashReconciliation (sales - electronic - credit - expenses)
         $expectedCash = CashReconciliation::calculateExpectedCash($stockEntry->id);
@@ -229,6 +237,7 @@ class ReconciliationController extends Controller
             'stockEntry',
             'totalSales',
             'electronicTotal',
+            'electronicBreakdown',
             'expectedCash',
             'expectedCollected',
             'creditSales',

@@ -15,11 +15,7 @@ use App\Models\ProductUnit;
 use App\Models\ProductUnitPrice;
 use App\Models\ProductUnitBarPrice;
 use App\Models\ItemBarName;
-use App\Models\ProductPurchaseHistory;
 use App\Models\InventoryLedger;
-use App\Models\WarehouseStock;
-use App\Models\WarehouseUnit;
-use App\Models\WarehouseUnitBarPrice;
 use App\Models\WarehouseTransferRequest;
 use App\Models\WarehouseTransferRequestItem;
 use App\Models\ActivityLog;
@@ -402,11 +398,16 @@ class StockEntryController extends Controller
 
             DB::commit();
 
-            if ($user->isSeller() && $entryDate === now()->format('Y-m-d')) {
+            // Sellers stay on their own sheet after saving - whatever date
+            // it's for, not just today's - so "Save" never bounces them to
+            // a different (read-only) page; the flash message alone confirms
+            // the save. Only non-sellers (director/manager) go to the show
+            // page, which is their normal way of reviewing a sales record.
+            if ($user->isSeller()) {
                 return redirect()->route('stock-entries.edit', $stockEntry)
                     ->with('success', 'Sales saved.');
             }
-            
+
             return redirect()->route('stock-entries.show', $stockEntry)
                 ->with('success', 'Stock entry saved successfully!');
 
@@ -583,6 +584,15 @@ class StockEntryController extends Controller
         });
         
         $paginatedItems = $itemsData; // Pass all items directly
+
+        // Live reload: the seller's page re-fetches this same URL every few
+        // seconds and patches only the rows it's safe to touch (never one
+        // with an unsaved sales quantity mid-typing), so a director's price/
+        // stock/name change shows up without a manual refresh. Returns just
+        // the rendered rows, not a full page.
+        if (request()->boolean('poll')) {
+            return response(view('stock-entries._edit_rows', compact('paginatedItems'))->render());
+        }
 
         return view('stock-entries.edit', compact('stockEntry', 'paginatedItems'));
     }
@@ -768,11 +778,16 @@ class StockEntryController extends Controller
 
             DB::commit();
 
-            if ($user->isSeller() && $stockEntry->date->format('Y-m-d') === now()->format('Y-m-d')) {
+            // Sellers stay on their own sheet after saving - whatever date
+            // it's for, not just today's - so "Save" never bounces them to
+            // a different (read-only) page; the flash message alone confirms
+            // the save. Only non-sellers (director/manager) go to the show
+            // page, which is their normal way of reviewing a sales record.
+            if ($user->isSeller()) {
                 return redirect()->route('stock-entries.edit', $stockEntry)
                     ->with('success', 'Sales saved.');
             }
-            
+
             return redirect()->route('stock-entries.show', $stockEntry)
                 ->with('success', 'Stock entry updated successfully!');
 
@@ -948,7 +963,7 @@ class StockEntryController extends Controller
                 ];
             })->values()->all() ?? [];
 
-            $firstAddedAt = $firstAddedDates->get($stock->bar_id . '_' . $stock->item_id) ?? $item?->created_at;
+            $firstAddedAt = $firstAddedDates->get($stock->bar_id . '_' . $stock->item_id) ?? $item?->created_at?->timestamp ?? 0;
 
             return [
                 'bar_id' => $stock->bar_id,
@@ -965,7 +980,9 @@ class StockEntryController extends Controller
                 'product_units' => $productUnits,
                 'first_added_at' => $firstAddedAt,
             ];
-        })->sortBy([['bar_id', 'asc'], ['first_added_at', 'asc']])->values();
+        // item_id is a tiebreaker for items added in the same instant, so this
+        // matches itemsForBar()'s (the Sell page's) order exactly, per bar.
+        })->sortBy([['bar_id', 'asc'], ['first_added_at', 'asc'], ['item_id', 'asc']])->values();
 
         if (!empty($search)) {
             $stockRows = $stockRows->filter(function ($row) use ($search) {
@@ -973,6 +990,24 @@ class StockEntryController extends Controller
                        stripos($row['category'], $search) !== false ||
                        stripos($row['bar_name'], $search) !== false;
             })->values();
+        }
+
+        // Live-reload poll: the page re-fetches this same URL every few
+        // seconds and swaps the table body in place, so directors/managers
+        // viewing Stock Overview see another user's edits without a manual
+        // refresh. Returns just the rendered rows (not a full page) plus the
+        // same per-row lookup the Edit modal reads from client-side.
+        if ($request->boolean('poll')) {
+            $canManageStock = $user->isDirector() || $user->isManager();
+
+            return response()->json([
+                'html' => view('stock._rows', compact('stockRows', 'canManageStock'))->render(),
+                'stockItems' => $stockRows->keyBy(fn ($r) => $r['bar_id'] . '_' . $r['item_id'])->map(fn ($r) => [
+                    'item_name' => $r['item_name'],
+                    'category' => $r['category'],
+                    'product_units' => $r['product_units'],
+                ]),
+            ]);
         }
 
         return view('stock.index', compact('bars', 'stockRows', 'selectedBarId', 'search'));
@@ -1079,564 +1114,6 @@ class StockEntryController extends Controller
             DB::rollback();
             return back()->withInput()
                 ->with('error', 'Error saving stock entry: ' . $e->getMessage());
-        }
-    }
-
-    // API Methods for Item Management
-    public function getItemsByBar($barId)
-    {
-        // Get all items with their bar-specific prices
-        $items = Item::with(['barItemPrices' => function($query) use ($barId) {
-            $query->where('bar_id', $barId);
-        }])->get();
-
-        $itemsWithStock = $items->map(function($item) use ($barId) {
-            // Get current stock for this item and bar from the most recent stock entry
-            $currentStock = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
-                ->where('sales.bar_id', $barId)
-                ->where('stock_entry_items.item_id', $item->id)
-                ->orderBy('sales.date', 'desc')
-                ->orderBy('stock_entry_items.updated_at', 'desc')
-                ->orderBy('stock_entry_items.id', 'desc')
-                ->value('stock_entry_items.closing_stock') ?? 0;
-
-            // If no stock entry found, check if there's any stock entry at all
-            if ($currentStock == 0) {
-                $anyStock = StockEntryItem::where('item_id', $item->id)->exists();
-                if (!$anyStock) {
-                    // No stock entries exist for this item, set to 0
-                    $currentStock = 0;
-                }
-            }
-
-            return [
-                'id' => $item->id,
-                'name' => $item->displayNameForBar($barId),
-                'category' => $item->category,
-                'description' => $item->description ?? '',
-                'price' => $item->barItemPrices->first()?->price ?? 0,
-                'stock' => $currentStock,
-                'opening_stock' => 0,
-            ];
-        });
-
-        return response()->json($itemsWithStock);
-    }
-
-    public function getItem($itemId)
-    {
-        $item = Item::findOrFail($itemId);
-        
-        return response()->json([
-            'id' => $item->id,
-            'name' => $item->name,
-            'category' => $item->category,
-            'description' => $item->description,
-            'price' => $item->barItemPrices->first()?->price ?? 0,
-            'stock' => 0,
-            'opening_stock' => 0,
-        ]);
-    }
-
-    public function createItem(Request $request)
-    {
-        // Decode additional_units if sent as JSON string
-        $additionalUnits = $request->additional_units;
-        if (is_string($additionalUnits)) {
-            $additionalUnits = json_decode($additionalUnits, true);
-        }
-        
-        $request->merge(['additional_units' => $additionalUnits]);
-        
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'category' => 'required|string|in:beer,spirit,soda,other',
-            'description' => 'nullable|string',
-            'expiry_date' => 'nullable|date|after_or_equal:today',
-            'purchase_unit' => 'required|string|max:255',
-            'quantity_purchased' => 'required|integer|min:1',
-            'total_purchase_cost' => 'required|numeric|min:0',
-            'base_unit' => 'required|string|max:255',
-            'conversion_factor' => 'required|integer|min:1',
-            'base_unit_selling_price' => 'required|numeric|min:0',
-            'additional_units' => 'nullable|array',
-            'bar_id' => 'required|exists:bars,id',
-        ]);
-
-        DB::beginTransaction();
-        
-        try {
-            // Calculate cost per base unit
-            $totalBaseUnits = $request->quantity_purchased * $request->conversion_factor;
-            $calculatedBaseUnitCost = $totalBaseUnits > 0 ? $request->total_purchase_cost / $totalBaseUnits : 0;
-
-            // Create the item
-            $item = Item::create([
-                'name' => $request->name,
-                'category' => $request->category,
-                'description' => $request->description,
-                'expiry_date' => $request->expiry_date,
-                'director_stock' => $totalBaseUnits, // Initial stock is calculated from purchase
-                'average_unit_cost' => $calculatedBaseUnitCost,
-                'lifetime_quantity_purchased' => $totalBaseUnits,
-            ]);
-
-            // Create purchase history record
-            $item->addPurchaseHistory([
-                'purchase_unit' => $request->purchase_unit,
-                'quantity_purchased' => $request->quantity_purchased,
-                'total_purchase_cost' => $request->total_purchase_cost,
-                'calculated_base_unit_cost' => $calculatedBaseUnitCost,
-                'purchase_date' => now()->format('Y-m-d'),
-            ]);
-
-            // Create base unit
-            $baseUnit = ProductUnit::create([
-                'item_id' => $item->id,
-                'unit_name' => $request->base_unit,
-                'conversion_factor' => 1,
-                'is_base_unit' => true,
-            ]);
-
-            // Create base unit price
-            ProductUnitPrice::create([
-                'item_id' => $item->id,
-                'unit_name' => $request->base_unit,
-                'selling_price' => $request->base_unit_selling_price,
-                'purchase_price' => $calculatedBaseUnitCost,
-            ]);
-
-            ProductUnitBarPrice::create([
-                'bar_id' => $request->bar_id,
-                'item_id' => $item->id,
-                'unit_name' => $request->base_unit,
-                'selling_price' => $request->base_unit_selling_price,
-                'purchase_price' => $calculatedBaseUnitCost,
-            ]);
-
-            // Create additional units if provided
-            if ($request->has('additional_units') && is_array($request->additional_units)) {
-                foreach ($request->additional_units as $unitData) {
-                    if (!empty($unitData['unit_name'])) {
-                        $additionalUnit = ProductUnit::create([
-                            'item_id' => $item->id,
-                            'unit_name' => $unitData['unit_name'],
-                            'conversion_factor' => $unitData['conversion_factor'] ?? 1,
-                            'is_base_unit' => false,
-                        ]);
-
-                        // Create unit price if selling price is provided
-                        if (isset($unitData['selling_price']) && $unitData['selling_price'] > 0) {
-                            $unitCost = $calculatedBaseUnitCost * $unitData['conversion_factor'];
-                            ProductUnitPrice::create([
-                                'item_id' => $item->id,
-                                'unit_name' => $unitData['unit_name'],
-                                'selling_price' => $unitData['selling_price'],
-                                'purchase_price' => $unitCost,
-                            ]);
-
-                            ProductUnitBarPrice::create([
-                                'bar_id' => $request->bar_id,
-                                'item_id' => $item->id,
-                                'unit_name' => $unitData['unit_name'],
-                                'selling_price' => $unitData['selling_price'],
-                                'purchase_price' => $unitCost,
-                            ]);
-                        }
-                    }
-                }
-            }
-
-            // Create bar item price using base unit selling price
-            BarItemPrice::create([
-                'bar_id' => $request->bar_id,
-                'item_id' => $item->id,
-                'price' => $request->base_unit_selling_price,
-            ]);
-
-            // Create ledger entry for initial stock
-            $item->addLedgerEntry([
-                'bar_id' => $request->bar_id,
-                'action_type' => 'purchase',
-                'quantity' => $totalBaseUnits,
-                'unit_cost' => $calculatedBaseUnitCost,
-                'total_cost' => $request->total_purchase_cost,
-                'balance_after' => $totalBaseUnits,
-                'reference_type' => 'purchase_history',
-                'reference_id' => $item->purchaseHistory->first()->id,
-                'transaction_date' => now(),
-            ]);
-
-            DB::commit();
-            
-            return response()->json(['success' => true, 'message' => 'Item created successfully']);
-        } catch (\Exception $e) {
-            DB::rollback();
-            return response()->json(['success' => false, 'message' => 'Error creating item: ' . $e->getMessage()], 500);
-        }
-    }
-
-    public function editItem($itemId)
-    {
-        $barId = request('bar_id', Bar::listed()->orderBy('name')->value('id'));
-
-        $item = Item::with(['barItemPrices' => function($query) use ($barId) {
-            $query->where('bar_id', $barId);
-        }, 'productUnits.price', 'purchaseHistory'])->findOrFail($itemId);
-
-        // Bar-specific overrides for this bar - take priority over the global
-        // default below so the edit form pre-fills THIS bar's actual price.
-        $barUnitPrices = ProductUnitBarPrice::where('bar_id', $barId)
-            ->where('item_id', $item->id)
-            ->get()
-            ->keyBy(fn ($p) => strtolower($p->unit_name));
-
-        // Format product units with their prices
-        $productUnits = $item->productUnits->map(function($unit) use ($barUnitPrices) {
-            $price = $barUnitPrices->get(strtolower($unit->unit_name)) ?? $unit->price;
-
-            return [
-                'id' => $unit->id,
-                'item_id' => $unit->item_id,
-                'unit_name' => $unit->unit_name,
-                'conversion_factor' => $unit->conversion_factor,
-                'is_base_unit' => $unit->is_base_unit,
-                'price' => $price ? [
-                    'id' => $price->id,
-                    'item_id' => $unit->item_id,
-                    'unit_name' => $unit->unit_name,
-                    'selling_price' => $price->selling_price,
-                    'purchase_price' => $price->purchase_price,
-                ] : null,
-            ];
-        })->toArray();
-
-        // Get latest purchase history
-        $latestPurchase = $item->purchaseHistory->first();
-
-        return response()->json([
-            'id' => $item->id,
-            'name' => $item->displayNameForBar($barId),
-            'category' => $item->category,
-            'description' => $item->description,
-            'expiry_date' => $item->expiry_date ? $item->expiry_date->format('Y-m-d') : null,
-            'director_stock' => $item->director_stock,
-            'average_unit_cost' => $item->average_unit_cost,
-            'bar_item_prices' => $item->barItemPrices->toArray(),
-            'product_units' => $productUnits,
-            'purchase_unit' => $latestPurchase->purchase_unit ?? null,
-            'quantity_purchased' => $latestPurchase->quantity_purchased ?? null,
-            'total_purchase_cost' => $latestPurchase->total_purchase_cost ?? null,
-            'base_unit' => $item->baseUnit->unit_name ?? 'Bottle',
-            'conversion_factor' => $latestPurchase ? ($latestPurchase->quantity_purchased * ($item->baseUnit->conversion_factor ?? 1) / $latestPurchase->quantity_purchased) : 24,
-        ]);
-    }
-
-    public function updateItem(Request $request, $itemId)
-    {
-        // Decode additional_units if sent as JSON string
-        $additionalUnits = $request->additional_units;
-        if (is_string($additionalUnits)) {
-            $additionalUnits = json_decode($additionalUnits, true);
-        }
-        
-        $request->merge(['additional_units' => $additionalUnits]);
-        
-        $request->validate([
-            'name' => 'required|string|max:255',
-            'category' => 'required|string|in:beer,spirit,soda,other',
-            'description' => 'nullable|string',
-            'expiry_date' => 'nullable|date|after_or_equal:today',
-            'base_unit' => 'required|string|max:255',
-            'base_unit_selling_price' => 'required|numeric|min:0',
-            'additional_units' => 'nullable|array',
-            'bar_id' => 'required|exists:bars,id',
-        ]);
-
-        DB::beginTransaction();
-        
-        try {
-            $item = Item::findOrFail($itemId);
-
-            // Update the item basic info - name is intentionally excluded
-            // here; it's a per-bar display override (see below), so renaming
-            // through this bar's edit form never changes what other bars see.
-            $item->update([
-                'category' => $request->category,
-                'description' => $request->description,
-                'expiry_date' => $request->expiry_date,
-            ]);
-
-            ItemBarName::updateOrCreate(
-                ['bar_id' => $request->bar_id, 'item_id' => $item->id],
-                ['name' => $request->name]
-            );
-
-            // Update or create bar item price
-            BarItemPrice::updateOrCreate(
-                ['bar_id' => $request->bar_id, 'item_id' => $item->id],
-                ['price' => $request->base_unit_selling_price]
-            );
-
-            // Update base unit
-            $baseUnit = $item->baseUnit;
-            if ($baseUnit) {
-                $baseUnit->update([
-                    'unit_name' => $request->base_unit,
-                ]);
-            } else {
-                $baseUnit = ProductUnit::create([
-                    'item_id' => $item->id,
-                    'unit_name' => $request->base_unit,
-                    'conversion_factor' => 1,
-                    'is_base_unit' => true,
-                ]);
-            }
-
-            // Seed the global default only if missing - this action is scoped
-            // to one bar, so the actual price change belongs on the per-bar
-            // override below, never on the row every other bar falls back to.
-            ProductUnitPrice::firstOrCreate(
-                ['item_id' => $item->id, 'unit_name' => $request->base_unit],
-                [
-                    'selling_price' => $request->base_unit_selling_price,
-                    'purchase_price' => $item->average_unit_cost ?? 0,
-                ]
-            );
-
-            ProductUnitBarPrice::updateOrCreate(
-                ['bar_id' => $request->bar_id, 'item_id' => $item->id, 'unit_name' => $request->base_unit],
-                [
-                    'selling_price' => $request->base_unit_selling_price,
-                    'purchase_price' => $item->average_unit_cost ?? 0,
-                ]
-            );
-
-            // Handle additional units - delete non-base units and recreate
-            ProductUnit::where('item_id', $item->id)
-                ->where('is_base_unit', false)
-                ->delete();
-
-            ProductUnitPrice::where('item_id', $item->id)
-                ->where('unit_name', '!=', $request->base_unit)
-                ->delete();
-
-            ProductUnitBarPrice::where('bar_id', $request->bar_id)
-                ->where('item_id', $item->id)
-                ->where('unit_name', '!=', $request->base_unit)
-                ->delete();
-
-            // Create new additional units
-            if ($request->has('additional_units') && is_array($request->additional_units)) {
-                foreach ($request->additional_units as $unitData) {
-                    if (!empty($unitData['unit_name'])) {
-                        $additionalUnit = ProductUnit::create([
-                            'item_id' => $item->id,
-                            'unit_name' => $unitData['unit_name'],
-                            'conversion_factor' => $unitData['conversion_factor'] ?? 1,
-                            'is_base_unit' => false,
-                        ]);
-
-                        // Create unit price if selling price is provided
-                        if (isset($unitData['selling_price']) && $unitData['selling_price'] > 0) {
-                            $unitCost = ($item->average_unit_cost ?? 0) * $unitData['conversion_factor'];
-                            ProductUnitPrice::create([
-                                'item_id' => $item->id,
-                                'unit_name' => $unitData['unit_name'],
-                                'selling_price' => $unitData['selling_price'],
-                                'purchase_price' => $unitCost,
-                            ]);
-
-                            ProductUnitBarPrice::create([
-                                'bar_id' => $request->bar_id,
-                                'item_id' => $item->id,
-                                'unit_name' => $unitData['unit_name'],
-                                'selling_price' => $unitData['selling_price'],
-                                'purchase_price' => $unitCost,
-                            ]);
-                        }
-                    }
-                }
-            }
-
-            DB::commit();
-            
-            return response()->json(['success' => true, 'message' => 'Item updated successfully']);
-        } catch (\Exception $e) {
-            DB::rollback();
-            return response()->json(['success' => false, 'message' => 'Error updating item: ' . $e->getMessage()], 500);
-        }
-    }
-
-    public function deleteItem($itemId)
-    {
-        DB::beginTransaction();
-        
-        try {
-            $item = Item::findOrFail($itemId);
-            
-            // Check if item has any stock entries
-            $hasStockEntries = StockEntryItem::where('item_id', $itemId)->exists();
-            
-            if ($hasStockEntries) {
-                return response()->json(['success' => false, 'message' => 'Cannot delete item with existing stock entries'], 400);
-            }
-            
-            // Delete related bar item prices
-            BarItemPrice::where('item_id', $itemId)->delete();
-            
-            // Delete related units and prices
-            ProductUnit::where('item_id', $itemId)->delete();
-            ProductUnitPrice::where('item_id', $itemId)->delete();
-            ProductUnitBarPrice::where('item_id', $itemId)->delete();
-            ItemBarName::where('item_id', $itemId)->delete();
-
-            // Delete related ledger entries
-            InventoryLedger::where('item_id', $itemId)->delete();
-            
-            // Delete related purchase history
-            ProductPurchaseHistory::where('item_id', $itemId)->delete();
-            
-            // Delete the item
-            $item->delete();
-
-            DB::commit();
-            
-            return response()->json(['success' => true, 'message' => 'Item deleted successfully']);
-        } catch (\Exception $e) {
-            DB::rollback();
-            return response()->json(['success' => false, 'message' => 'Error deleting item: ' . $e->getMessage()], 500);
-        }
-    }
-
-    public function restockItem(Request $request, $itemId)
-    {
-        $request->validate([
-            'purchase_unit' => 'required|string|max:255',
-            'quantity_purchased' => 'required|integer|min:1',
-            'total_purchase_cost' => 'required|numeric|min:0',
-            'supplier' => 'nullable|string|max:255',
-            'reference_number' => 'nullable|string|max:255',
-            'notes' => 'nullable|string|max:500',
-        ]);
-
-        DB::beginTransaction();
-        
-        try {
-            $item = Item::findOrFail($itemId);
-            $barId = $request->bar_id ?? auth()->user()->bar_id;
-            
-            // Get conversion factor from base unit
-            $baseUnit = $item->baseUnit;
-            $conversionFactor = $baseUnit ? $baseUnit->conversion_factor : 1;
-            
-            // Calculate cost per base unit
-            $totalBaseUnits = $request->quantity_purchased * $conversionFactor;
-            $calculatedBaseUnitCost = $totalBaseUnits > 0 ? $request->total_purchase_cost / $totalBaseUnits : 0;
-
-            // Create purchase history record
-            $purchaseHistory = $item->addPurchaseHistory([
-                'purchase_unit' => $request->purchase_unit,
-                'quantity_purchased' => $request->quantity_purchased,
-                'total_purchase_cost' => $request->total_purchase_cost,
-                'calculated_base_unit_cost' => $calculatedBaseUnitCost,
-                'supplier' => $request->supplier,
-                'reference_number' => $request->reference_number,
-                'notes' => $request->notes,
-                'purchase_date' => now()->format('Y-m-d'),
-            ]);
-
-            // Update item stock and metrics
-            $item->update([
-                'director_stock' => $item->director_stock + $totalBaseUnits,
-                'lifetime_quantity_purchased' => $item->lifetime_quantity_purchased + $totalBaseUnits,
-            ]);
-
-            // Recalculate weighted average cost
-            $item->updateWeightedAverageCost();
-
-            // Create ledger entry for restock
-            $item->addLedgerEntry([
-                'bar_id' => $barId,
-                'action_type' => 'purchase',
-                'quantity' => $totalBaseUnits,
-                'unit_cost' => $calculatedBaseUnitCost,
-                'total_cost' => $request->total_purchase_cost,
-                'balance_after' => $item->director_stock,
-                'reference_type' => 'purchase_history',
-                'reference_id' => $purchaseHistory->id,
-                'transaction_date' => now(),
-            ]);
-
-            DB::commit();
-            
-            return response()->json(['success' => true, 'message' => 'Item restocked successfully']);
-        } catch (\Exception $e) {
-            DB::rollback();
-            return response()->json(['success' => false, 'message' => 'Error restocking item: ' . $e->getMessage()], 500);
-        }
-    }
-
-    public function getItemLedger($itemId)
-    {
-        $item = Item::with(['ledger' => function($query) {
-            $query->orderBy('transaction_date', 'desc')->with('bar');
-        }])->findOrFail($itemId);
-
-        return response()->json([
-            'item' => [
-                'id' => $item->id,
-                'name' => $item->name,
-                'category' => $item->category,
-            ],
-            'ledger' => $item->ledger->map(function($entry) {
-                return [
-                    'id' => $entry->id,
-                    'action_type' => $entry->action_type,
-                    'quantity' => $entry->quantity,
-                    'unit_cost' => $entry->unit_cost,
-                    'total_cost' => $entry->total_cost,
-                    'balance_after' => $entry->balance_after,
-                    'transaction_date' => $entry->transaction_date->format('Y-m-d H:i'),
-                    'bar_name' => $entry->bar ? $entry->bar->name : 'Warehouse',
-                    'notes' => $entry->notes,
-                ];
-            }),
-        ]);
-    }
-
-    public function getStockHistory($itemId)
-    {
-        try {
-            $selectedBarId = request('bar_id', Bar::listed()->orderBy('name')->value('id'));
-            
-            // Get stock history for this item and bar - include all bars for comparison
-            $stockHistory = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
-                ->join('bars', 'sales.bar_id', '=', 'bars.id')
-                ->where('stock_entry_items.item_id', $itemId)
-                ->orderBy('sales.date', 'desc')
-                ->orderBy('sales.created_at', 'desc')
-                ->select([
-                    'sales.date',
-                    'bars.name as bar_name',
-                    'bars.id as bar_id',
-                    'stock_entry_items.opening_stock',
-                    'stock_entry_items.ordered_stock',
-                    'stock_entry_items.total_stock',
-                    'stock_entry_items.closing_stock',
-                    'stock_entry_items.sold_quantity',
-                    'stock_entry_items.sales_amount',
-                    'stock_entry_items.price',
-                    'stock_entry_items.purchase_price',
-                    'stock_entry_items.expiry_date',
-                    'sales.created_at'
-                ])
-                ->get();
-
-            return response()->json($stockHistory);
-        } catch (\Exception $e) {
-            \Log::error('Stock history error: ' . $e->getMessage());
-            return response()->json(['error' => 'Failed to load stock history'], 500);
         }
     }
 
@@ -1799,8 +1276,13 @@ private function itemsForBar(int $barId)
 
     $firstAdded = $this->firstAddedDatesForBars($items->pluck('id')->all(), [$barId]);
 
+    // Sort by when the item joined this bar, then by item id as a tiebreaker
+    // for items added in the same instant - the exact same tiebreaker
+    // stockOverview() uses, so this bar's order here matches Stock Overview
+    // for that bar exactly, item for item.
     return $items->sortBy(function ($item) use ($barId, $firstAdded) {
-        return $firstAdded->get($barId . '_' . $item->id) ?? $item->created_at;
+        $timestamp = $firstAdded->get($barId . '_' . $item->id) ?? $item->created_at?->timestamp ?? 0;
+        return sprintf('%020d_%010d', $timestamp, $item->id);
     })->values();
 }
 
@@ -1820,11 +1302,15 @@ private function firstAddedDatesForBars(array $itemIds, array $barIds): \Illumin
         return collect();
     }
 
+    // Normalized to plain unix timestamps (not Carbon instances/raw date
+    // strings) so every caller compares the same type the same way - mixing
+    // a Carbon object against a raw SQL date string here previously risked
+    // inconsistent tie-breaking between Stock Overview and the Sell page.
     $barItemDates = BarItemPrice::whereIn('bar_id', $barIds)
         ->whereIn('item_id', $itemIds)
         ->get(['bar_id', 'item_id', 'created_at'])
         ->keyBy(fn ($p) => $p->bar_id . '_' . $p->item_id)
-        ->map(fn ($p) => $p->created_at);
+        ->map(fn ($p) => $p->created_at?->timestamp);
 
     $stockEntryDates = StockEntryItem::join('sales', 'stock_entry_items.stock_entry_id', '=', 'sales.id')
         ->whereIn('sales.bar_id', $barIds)
@@ -1833,12 +1319,15 @@ private function firstAddedDatesForBars(array $itemIds, array $barIds): \Illumin
         ->select('sales.bar_id', 'stock_entry_items.item_id', DB::raw('MIN(stock_entry_items.created_at) as first_seen'))
         ->get()
         ->keyBy(fn ($r) => $r->bar_id . '_' . $r->item_id)
-        ->map(fn ($r) => $r->first_seen);
+        ->map(fn ($r) => $r->first_seen ? \Carbon\Carbon::parse($r->first_seen)->timestamp : null);
 
     return $barItemDates->keys()->merge($stockEntryDates->keys())
         ->unique()
         ->mapWithKeys(function ($key) use ($barItemDates, $stockEntryDates) {
-            $candidates = array_filter([$barItemDates->get($key), $stockEntryDates->get($key)]);
+            $candidates = array_filter(
+                [$barItemDates->get($key), $stockEntryDates->get($key)],
+                fn ($v) => $v !== null
+            );
             return [$key => empty($candidates) ? null : min($candidates)];
         });
 }
@@ -2442,33 +1931,6 @@ private function upgradeLegacyShotStockFigures(
                 ->whereRaw('LOWER(unit_name) NOT IN (' . implode(',', array_fill(0, count($submittedUnitNames), '?')) . ')', $submittedUnitNames)
                 ->delete();
 
-            // Sync with warehouse - looked up by the item's shared catalog
-            // name, which no longer changes here (renaming is per-bar only,
-            // so the warehouse link that other bars' transfers rely on must
-            // stay stable) - delete warehouse unit bar prices so BarItemPrice
-            // takes priority.
-            $warehouseStock = WarehouseStock::where('item_name', $item->name)
-                ->with(['units.barPrices'])
-                ->first();
-
-            if ($warehouseStock) {
-                $warehouseStock->selling_price = $baseSellingPrice;
-                if ($basePurchasePrice > 0) {
-                    $warehouseStock->purchase_price = $basePurchasePrice;
-                }
-                $warehouseStock->save();
-
-                // Get all warehouse unit IDs for this warehouse stock
-                $warehouseUnitIds = $warehouseStock->units->pluck('id')->toArray();
-
-                // Delete warehouse unit bar prices for this bar so BarItemPrice takes priority
-                if (!empty($warehouseUnitIds)) {
-                    WarehouseUnitBarPrice::whereIn('warehouse_unit_id', $warehouseUnitIds)
-                        ->where('bar_id', $bar->id)
-                        ->delete();
-                }
-            }
-
             // Log the activity
             $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
             $newDisplayName = $itemName !== '' ? $itemName : $oldDisplayName;
@@ -2506,12 +1968,10 @@ private function upgradeLegacyShotStockFigures(
             'stock_quantity' => 'required|integer|min:0',
             'item_name' => 'required|string|max:255',
             'category' => 'nullable|string|max:255',
-            'units' => 'required|array|min:1',
-            'units.*.unit_name' => 'required|string|in:Bottle,Shot,Glass,Can,Crate',
-            'units.*.selling_price' => 'required|numeric|min:0',
-            'units.*.purchase_price' => 'nullable|numeric|min:0',
-            'units.*.conversion_factor' => 'nullable|integer|min:1',
-            'units.*.is_base' => 'nullable|in:0,1',
+            'unit_name' => 'required|string|in:Bottle,Shot,Glass,Can,Crate',
+            'selling_price' => 'required|numeric|min:0',
+            'purchase_price' => 'nullable|numeric|min:0',
+            'expiry_date' => 'nullable|date',
         ]);
 
         DB::beginTransaction();
@@ -2520,26 +1980,17 @@ private function upgradeLegacyShotStockFigures(
             $stockQuantity = (int) $request->input('stock_quantity');
             $itemName = trim($request->input('item_name'));
             $category = $request->input('category', 'Other') ?: 'Other';
-            $units = $request->input('units');
+            $unitName = $request->input('unit_name');
+            $basePrice = (float) $request->input('selling_price');
+            $baseCostPrice = (float) ($request->input('purchase_price') ?? 0);
+            $expiryDate = $request->input('expiry_date') ?: null;
 
             $bar = Bar::find($barId);
-
-            // Identify the base unit (first row, or the one flagged is_base=1)
-            $baseUnitIndex = 0;
-            foreach ($units as $i => $u) {
-                if (!empty($u['is_base']) && $u['is_base'] == '1') {
-                    $baseUnitIndex = $i;
-                    break;
-                }
-            }
-            $baseUnit = $units[$baseUnitIndex];
-            $basePrice = (float) $baseUnit['selling_price'];
-            $baseCostPrice = (float) ($baseUnit['purchase_price'] ?? 0);
 
             // Find existing item by name or create a new one
             $item = Item::where('name', $itemName)->first();
             $isNewItem = false;
-            
+
             if (!$item) {
                 $isNewItem = true;
                 $item = Item::create([
@@ -2551,85 +2002,52 @@ private function upgradeLegacyShotStockFigures(
                     'lifetime_quantity_purchased' => $stockQuantity,
                 ]);
 
-                // Create ProductUnit + ProductUnitPrice for each unit
-                foreach ($units as $i => $unitData) {
-                    $isBase = ($i === $baseUnitIndex);
-                    $conversionFactor = $isBase ? 1 : (int) ($unitData['conversion_factor'] ?? 1);
+                ProductUnit::create([
+                    'item_id' => $item->id,
+                    'unit_name' => $unitName,
+                    'conversion_factor' => 1,
+                    'is_base_unit' => true,
+                ]);
 
-                    ProductUnit::create([
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'conversion_factor' => $conversionFactor,
-                        'is_base_unit' => $isBase,
-                    ]);
+                ProductUnitPrice::create([
+                    'item_id' => $item->id,
+                    'unit_name' => $unitName,
+                    'selling_price' => $basePrice,
+                    'purchase_price' => $baseCostPrice,
+                ]);
 
-                    ProductUnitPrice::create([
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'selling_price' => (float) $unitData['selling_price'],
-                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
-                    ]);
-
-                    ProductUnitBarPrice::create([
-                        'bar_id' => $barId,
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'selling_price' => (float) $unitData['selling_price'],
-                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
-                    ]);
-                }
+                ProductUnitBarPrice::create([
+                    'bar_id' => $barId,
+                    'item_id' => $item->id,
+                    'unit_name' => $unitName,
+                    'selling_price' => $basePrice,
+                    'purchase_price' => $baseCostPrice,
+                ]);
             } else {
                 $item->director_stock = max($item->director_stock, $stockQuantity);
                 $item->price = $basePrice;
                 $item->save();
 
-                // For existing items, add any NEW units that don't already exist
-                $existingUnits = ProductUnit::where('item_id', $item->id)
-                    ->pluck('unit_name')
-                    ->map(fn ($n) => strtolower($n))
-                    ->toArray();
+                // This form only creates brand-new items or restocks an
+                // existing one in a unit it already sells - introducing a
+                // new unit for an existing item needs a conversion factor,
+                // which belongs on Edit Stock, not here.
+                $unitExists = ProductUnit::where('item_id', $item->id)
+                    ->whereRaw('LOWER(unit_name) = ?', [strtolower($unitName)])
+                    ->exists();
 
-                foreach ($units as $i => $unitData) {
-                    $unitNameLower = strtolower($unitData['unit_name']);
-                    if (in_array($unitNameLower, $existingUnits)) {
-                        // This bar's price for this existing unit - scoped to
-                        // $barId so restocking it here never changes what
-                        // other bars see for the same item/unit.
-                        ProductUnitBarPrice::updateOrCreate(
-                            ['bar_id' => $barId, 'item_id' => $item->id, 'unit_name' => $unitData['unit_name']],
-                            [
-                                'selling_price' => (float) $unitData['selling_price'],
-                                'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
-                            ]
-                        );
-                        continue;
-                    }
-
-                    $isBase = ($i === $baseUnitIndex);
-                    $conversionFactor = $isBase ? 1 : (int) ($unitData['conversion_factor'] ?? 1);
-
-                    ProductUnit::create([
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'conversion_factor' => $conversionFactor,
-                        'is_base_unit' => $isBase,
-                    ]);
-
-                    ProductUnitPrice::create([
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'selling_price' => (float) $unitData['selling_price'],
-                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
-                    ]);
-
-                    ProductUnitBarPrice::create([
-                        'bar_id' => $barId,
-                        'item_id' => $item->id,
-                        'unit_name' => $unitData['unit_name'],
-                        'selling_price' => (float) $unitData['selling_price'],
-                        'purchase_price' => (float) ($unitData['purchase_price'] ?? 0),
-                    ]);
+                if (!$unitExists) {
+                    DB::rollBack();
+                    return back()->withInput()->with('error', "\"{$item->name}\" doesn't sell in {$unitName} yet. Use Edit Stock to add a new unit with its conversion factor, or pick one of its existing units here.");
                 }
+
+                // This bar's price for this existing unit - scoped to $barId
+                // so adding stock here never changes what other bars charge
+                // for the same item/unit.
+                ProductUnitBarPrice::updateOrCreate(
+                    ['bar_id' => $barId, 'item_id' => $item->id, 'unit_name' => $unitName],
+                    ['selling_price' => $basePrice, 'purchase_price' => $baseCostPrice]
+                );
             }
 
             // Create or update today's stock entry for the selected bar
@@ -2640,6 +2058,10 @@ private function upgradeLegacyShotStockFigures(
             ], [
                 'user_id' => $user->id,
             ]);
+
+            $existingStockItem = StockEntryItem::where('stock_entry_id', $stockEntry->id)
+                ->where('item_id', $item->id)
+                ->first();
 
             // Update or create stock entry item
             $stockEntryItem = StockEntryItem::updateOrCreate(
@@ -2656,6 +2078,8 @@ private function upgradeLegacyShotStockFigures(
                     'sales_amount' => 0,
                     'price' => $basePrice,
                     'purchase_price' => $baseCostPrice,
+                    'unit_name' => $unitName,
+                    'expiry_date' => $expiryDate ?: ($existingStockItem->expiry_date ?? null),
                 ]
             );
 
@@ -2671,14 +2095,13 @@ private function upgradeLegacyShotStockFigures(
             );
 
             // Log activity
-            $unitSummary = collect($units)->map(fn ($u) => $u['unit_name'] . ' @ MWK ' . number_format((float) $u['selling_price'], 2))->implode(', ');
             ActivityLog::log([
                 'action' => $isNewItem ? 'item_created' : 'stock_added',
-                'description' => "Added stock for {$item->name} at {$bar->name}: {$stockQuantity} units. Units: {$unitSummary}",
+                'description' => "Added stock for {$item->name} at {$bar->name}: {$stockQuantity} {$unitName}(s) @ MWK " . number_format($basePrice, 2) . ($expiryDate ? ", expires {$expiryDate}" : ''),
                 'subject_type' => Item::class,
                 'subject_id' => $item->id,
                 'old_values' => ['bar' => $bar->name],
-                'new_values' => ['stock' => $stockQuantity, 'base_price' => $basePrice, 'bar' => $bar->name, 'units' => $units],
+                'new_values' => ['stock' => $stockQuantity, 'base_price' => $basePrice, 'bar' => $bar->name, 'unit' => $unitName, 'expiry_date' => $expiryDate],
             ]);
 
             DB::commit();
@@ -2791,16 +2214,18 @@ private function upgradeLegacyShotStockFigures(
                 $stockEntryItem->price = $price;
                 $stockEntryItem->save();
             } else {
-                // No stock entry item for today yet: carry yesterday's closing over as
-                // today's opening so the restock shows as previous stock + added qty
-                // instead of resetting to zero.
-                $previousClosingMap = Sale::where('bar_id', $bar->id)
-                    ->where('date', '<', $today)
-                    ->orderBy('date', 'desc')
-                    ->orderBy('id', 'desc')
-                    ->with('stockEntryItems')
-                    ->first()?->stockEntryItems->pluck('closing_stock', 'item_id')->toArray() ?? [];
-                $oldClosing = (float) ($previousClosingMap[$item->id] ?? 0);
+                // No stock entry item for today yet: carry the item's latest
+                // known closing stock over as today's opening, so the restock
+                // shows as previous stock + added qty instead of resetting to
+                // zero. This must scan the item's own latest entry across ALL
+                // of the bar's sheets (matching the director/seller displays),
+                // not just the single most recent Sale - a day's sheet only
+                // stores rows for items with THAT day's activity, so the most
+                // recent sheet can easily be one that never touched this
+                // particular item, which previously made the restock silently
+                // start from 0 instead of the item's real current stock.
+                $latestClosingMap = $this->getLatestClosingStockForBar($bar->id);
+                $oldClosing = (float) ($latestClosingMap[$item->id] ?? 0);
                 $newClosing = $oldClosing + $additionalStock;
 
                 $stockEntryItem = StockEntryItem::create([

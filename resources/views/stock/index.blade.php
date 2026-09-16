@@ -105,57 +105,8 @@
                                 @endif
                             </tr>
                         </thead>
-                        <tbody>
-                            @forelse($stockRows as $row)
-                                <tr>
-                                    <td class="align-middle text-muted">{{ $loop->iteration }}</td>
-                                    <td class="align-middle fw-semibold">{{ $row['bar_name'] }}</td>
-                                    <td class="align-middle fw-bold text-dark">{{ $row['item_name'] }}</td>
-                                    <td class="align-middle text-capitalize"><span class="badge bg-secondary bg-opacity-10 text-dark border-0 px-2 py-1">{{ $row['category'] }}</span></td>
-                                    <td class="align-middle">
-                                        @if($canManageStock)
-                                            <span class="editable-stock fw-bold text-primary" onclick="editStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})" style="cursor: pointer;" title="Click to edit stock">
-                                                {{ number_format($row['stock']) }}
-                                                <i class="bi bi-pencil-square small ms-1 opacity-75"></i>
-                                            </span>
-                                        @else
-                                            <span class="fw-bold">{{ number_format($row['stock']) }}</span>
-                                        @endif
-                                    </td>
-                                    <td class="align-middle fw-semibold">MWK {{ number_format($row['price'], 2) }}</td>
-                                    <td class="align-middle fw-semibold">MWK {{ number_format($row['selling_price'], 2) }}</td>
-                                    <td class="align-middle fw-semibold">
-                                        @if($row['markup_percentage'] <= 0)
-                                            <span class="text-danger">{{ number_format($row['markup_percentage'], 2) }}%</span>
-                                        @else
-                                            <span class="text-success">{{ number_format($row['markup_percentage'], 2) }}%</span>
-                                        @endif
-                                    </td>
-                                    <td class="align-middle text-muted small">{{ \Carbon\Carbon::parse($row['last_updated'])->format('M d, Y') }}</td>
-                                    @if($canManageStock)
-                                        <td class="align-middle">
-                                            <div class="btn-group">
-                                                <button class="btn btn-sm btn-outline-success" onclick="restockStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }}, {{ $row['selling_price'] }})">
-                                                    <i class="bi bi-plus-lg me-1"></i> Restock
-                                                </button>
-                                                <button class="btn btn-sm btn-outline-primary" onclick="editStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}', {{ $row['stock'] }})">
-                                                    <i class="bi bi-pencil"></i> Edit
-                                                </button>
-                                                <button class="btn btn-sm btn-outline-danger" onclick="deleteStock({{ $row['item_id'] }}, {{ $row['bar_id'] }}, '{{ $row['item_name'] }}', '{{ $row['bar_name'] }}')">
-                                                    <i class="bi bi-trash"></i> Delete
-                                                </button>
-                                            </div>
-                                        </td>
-                                    @endif
-                                </tr>
-                            @empty
-                                <tr>
-                                    <td colspan="{{ $canManageStock ? 10 : 9 }}" class="text-center py-5">
-                                        <div class="opacity-25 display-4 mb-3">📦</div>
-                                        <p class="text-muted mb-0">No stock records available for this selection.</p>
-                                    </td>
-                                </tr>
-                            @endforelse
+                        <tbody id="stockTableBody">
+                            @include('stock._rows')
                         </tbody>
                     </table>
                 </div>
@@ -322,49 +273,35 @@
                         <input type="number" name="stock_quantity" class="form-control" min="0" required placeholder="e.g. 50">
                     </div>
 
-                    <!-- Multi-unit section -->
                     <div class="mb-3">
-                        <label class="form-label fw-bold">Selling Units</label>
-                        <div class="small text-muted mb-2">The first unit is the <strong>base unit</strong> — stock is counted in this unit. For each additional unit, set the conversion factor (how many base units equal 1 of this unit). Example: if base is Shot, a Bottle with factor 28 means 1 Bottle = 28 Shots.</div>
-
-                        <div id="unitsContainer">
-                            <!-- Row 0: base unit (conversion_factor = 1, hidden) -->
-                            <div class="unit-row border rounded p-2 mb-2 bg-light">
-                                <div class="row g-2 align-items-end">
-                                    <div class="col-md-3">
-                                        <label class="form-label small mb-0">Unit Name</label>
-                                        <select name="units[0][unit_name]" class="form-select form-select-sm unit-name-select">
-                                            <option value="Bottle" selected>Bottle</option>
-                                            <option value="Shot">Shot</option>
-                                            <option value="Glass">Glass</option>
-                                            <option value="Can">Can</option>
-                                            <option value="Crate">Crate</option>
-                                        </select>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label small mb-0">Selling Price</label>
-                                        <input type="number" name="units[0][selling_price]" class="form-control form-control-sm" step="0.01" min="0" placeholder="0.00" required>
-                                    </div>
-                                    <div class="col-md-3">
-                                        <label class="form-label small mb-0">Cost Price</label>
-                                        <input type="number" name="units[0][purchase_price]" class="form-control form-control-sm" step="0.01" min="0" placeholder="0.00">
-                                    </div>
-                                    <div class="col-md-2 conversion-field d-none">
-                                        <label class="form-label small mb-0">Factor</label>
-                                        <input type="number" name="units[0][conversion_factor]" class="form-control form-control-sm" min="1" value="1" readonly>
-                                    </div>
-                                    <div class="col-md-1 text-end">
-                                        <button type="button" class="btn btn-sm btn-outline-danger remove-unit-btn" title="Remove unit" style="display:none;">&times;</button>
-                                    </div>
-                                </div>
-                                <input type="hidden" name="units[0][is_base]" value="1" class="is-base-input">
-                                <div class="small text-success mt-1 base-label">Base unit</div>
+                        <label class="form-label fw-bold">Selling Unit</label>
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-4">
+                                <label class="form-label small mb-0">Unit Name</label>
+                                <select name="unit_name" class="form-select form-select-sm">
+                                    <option value="Bottle" selected>Bottle</option>
+                                    <option value="Shot">Shot</option>
+                                    <option value="Glass">Glass</option>
+                                    <option value="Can">Can</option>
+                                    <option value="Crate">Crate</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small mb-0">Selling Price</label>
+                                <input type="number" name="selling_price" class="form-control form-control-sm" step="0.01" min="0" placeholder="0.00" required>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label small mb-0">Cost Price</label>
+                                <input type="number" name="purchase_price" class="form-control form-control-sm" step="0.01" min="0" placeholder="0.00">
                             </div>
                         </div>
+                        <div class="small text-muted mt-1">For an existing item, this must match a unit it already sells in — use Edit Stock to introduce a new unit with its conversion factor.</div>
+                    </div>
 
-                        <button type="button" class="btn btn-sm btn-outline-primary" id="addUnitBtn">
-                            <i class="bi bi-plus-lg me-1"></i>Add Another Unit
-                        </button>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold">Stock Expiry <span class="text-muted fw-normal small">(optional)</span></label>
+                        <input type="date" name="expiry_date" class="form-control" min="{{ now()->format('Y-m-d') }}">
+                        <div class="small text-muted mt-1">Set this to have the batch show up on the Stock Expiry page.</div>
                     </div>
                 </div>
                 <div class="modal-footer bg-light">
@@ -377,73 +314,6 @@
 </div>
 
 <script>
-(function() {
-    let unitIndex = 1;
-    const container = document.getElementById('unitsContainer');
-    const addBtn = document.getElementById('addUnitBtn');
-
-    function refreshUnitRows() {
-        const rows = container.querySelectorAll('.unit-row');
-        rows.forEach(function(row, i) {
-            // Re-index names
-            row.querySelectorAll('[name]').forEach(function(input) {
-                input.name = input.name.replace(/\[\d+\]/, '[' + i + ']');
-            });
-            // First row is always the base unit
-            const baseInput = row.querySelector('.is-base-input');
-            const baseLabel = row.querySelector('.base-label');
-            const convField = row.querySelector('.conversion-field');
-            const removeBtn = row.querySelector('.remove-unit-btn');
-
-            if (i === 0) {
-                if (baseInput) baseInput.value = '1';
-                if (baseLabel) baseLabel.style.display = '';
-                if (convField) convField.classList.add('d-none');
-            } else {
-                if (baseInput) baseInput.value = '0';
-                if (baseLabel) baseLabel.style.display = 'none';
-                if (convField) convField.classList.remove('d-none');
-            }
-
-            // Hide remove button if only one row
-            if (removeBtn) {
-                removeBtn.style.display = rows.length > 1 ? '' : 'none';
-            }
-        });
-        unitIndex = rows.length;
-    }
-
-    addBtn.addEventListener('click', function() {
-        const firstRow = container.querySelector('.unit-row');
-        const clone = firstRow.cloneNode(true);
-
-        // Reset values
-        clone.querySelectorAll('input[type="number"]').forEach(function(input) {
-            if (input.name.includes('selling_price') || input.name.includes('purchase_price')) {
-                input.value = '';
-                input.required = false;
-            } else if (input.name.includes('conversion_factor')) {
-                input.value = '1';
-                input.readOnly = false;
-            }
-        });
-        clone.querySelector('select').selectedIndex = 0;
-
-        container.appendChild(clone);
-        refreshUnitRows();
-    });
-
-    container.addEventListener('click', function(e) {
-        const btn = e.target.closest('.remove-unit-btn');
-        if (btn) {
-            btn.closest('.unit-row').remove();
-            refreshUnitRows();
-        }
-    });
-
-    refreshUnitRows();
-})();
-
 // Edit modal unit row management
 (function() {
     const container = document.getElementById('editUnitsContainer');
@@ -629,5 +499,38 @@ function deleteStock(itemId, barId, itemName, barName) {
         window.location.href = url;
     }
 }
+
+// Live reload: quietly re-fetch this same view every few seconds so changes
+// made elsewhere (another director editing/restocking/deleting an item)
+// show up without a manual refresh. Skipped entirely while any modal is
+// open, so it never disturbs an in-progress Edit/Restock/Delete action.
+(function () {
+    const POLL_INTERVAL_MS = 7000;
+
+    function anyModalOpen() {
+        return document.querySelector('.modal.show') !== null;
+    }
+
+    function poll() {
+        if (anyModalOpen()) {
+            return;
+        }
+
+        const url = new URL(window.location.href);
+        url.searchParams.set('poll', '1');
+
+        fetch(url.toString(), { headers: { 'Accept': 'application/json' } })
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (!data) return;
+                const tbody = document.getElementById('stockTableBody');
+                if (tbody) tbody.innerHTML = data.html;
+                window.stockItems = data.stockItems;
+            })
+            .catch(() => { /* a missed poll is harmless - the next interval retries */ });
+    }
+
+    setInterval(poll, POLL_INTERVAL_MS);
+})();
 </script>
 @endsection

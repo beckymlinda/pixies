@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 
 namespace App\Models;
 
@@ -23,4 +23,3 @@ class Debt extends Model
         return $this->belongsTo(User::class, 'seller_id');
     }
 }
-

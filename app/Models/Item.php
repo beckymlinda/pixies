@@ -105,14 +105,6 @@ class Item extends Model
     }
 
     /**
-     * Get all purchase history for this item.
-     */
-    public function purchaseHistory(): HasMany
-    {
-        return $this->hasMany(ProductPurchaseHistory::class)->orderBy('purchase_date', 'desc');
-    }
-
-    /**
      * Get all inventory ledger entries for this item.
      */
     public function ledger(): HasMany
@@ -137,43 +129,11 @@ class Item extends Model
     }
 
     /**
-     * Add a purchase history record.
-     */
-    public function addPurchaseHistory(array $data): ProductPurchaseHistory
-    {
-        return $this->purchaseHistory()->create($data);
-    }
-
-    /**
      * Add a ledger entry.
      */
     public function addLedgerEntry(array $data): InventoryLedger
     {
         return $this->ledger()->create($data);
-    }
-
-    /**
-     * Calculate weighted average unit cost.
-     */
-    public function calculateWeightedAverageCost(): float
-    {
-        $totalCost = $this->purchaseHistory()->sum('total_purchase_cost');
-        $totalQuantity = $this->purchaseHistory()->sum(\DB::raw('quantity_purchased * (SELECT conversion_factor FROM product_units WHERE product_units.item_id = product_purchase_history.item_id AND product_units.is_base_unit = true LIMIT 1)'));
-        
-        if ($totalQuantity > 0) {
-            return $totalCost / $totalQuantity;
-        }
-        
-        return $this->average_unit_cost ?? 0;
-    }
-
-    /**
-     * Update weighted average cost.
-     */
-    public function updateWeightedAverageCost(): void
-    {
-        $this->average_unit_cost = $this->calculateWeightedAverageCost();
-        $this->save();
     }
 
     /**

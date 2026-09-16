@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
     <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>Login | Pixies Bar Management</title>
-    
+    <link rel="icon" type="image/png" href="{{ asset('images/fav.png') }}">
+
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -52,34 +53,35 @@
         
         .login-header {
             background: #f8fafc;
-            padding: 3rem 2rem 2rem;
+            padding: 1.5rem 2rem 1rem;
             text-align: center;
             border-bottom: 1px solid #f1f5f9;
         }
-        
+
         .brand-logo {
-            width: 64px;
-            height: 64px;
+            width: 44px;
+            height: 44px;
             background: var(--navy-deep);
             color: white;
-            border-radius: 16px;
+            border-radius: 12px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 2rem;
-            margin-bottom: 1.5rem;
+            font-size: 1.35rem;
+            margin-bottom: 0.75rem;
             box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.3);
         }
-        
+
         .brand-name {
             font-family: 'Outfit', sans-serif;
             font-weight: 700;
+            font-size: 1.25rem;
             color: var(--navy-deep);
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.25rem;
         }
-        
+
         .login-body {
-            padding: 2.5rem 2rem;
+            padding: 1.5rem 2rem 1.75rem;
         }
         
         .form-label {
@@ -106,24 +108,24 @@
             background: var(--navy-deep);
             border: none;
             color: white;
-            padding: 0.85rem;
+            padding: 0.7rem;
             border-radius: 12px;
             font-weight: 700;
             width: 100%;
-            margin-top: 1rem;
+            margin-top: 0.25rem;
             transition: all 0.2s;
             box-shadow: 0 4px 6px -1px rgba(15, 23, 42, 0.2);
         }
-        
+
         .btn-login:hover {
             background: #1e293b;
             transform: translateY(-1px);
             box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.3);
         }
-        
+
         .footer-links {
             text-align: center;
-            margin-top: 1.5rem;
+            margin-top: 1rem;
         }
         
         .footer-links a {
@@ -146,29 +148,35 @@
             <div class="brand-logo">
                 <i class="bi bi-pentagon-fill"></i>
             </div>
-            <h3 class="brand-name">Pixies Bar</h3>
-            <p class="text-muted small px-4">Enter your credentials to access the management dashboard.</p>
+            <h3 class="brand-name mb-0">Pixies Bar</h3>
+            <p class="text-muted small px-4 mb-0">Enter your credentials to access the management dashboard.</p>
         </div>
-        
+
         <div class="login-body">
             @if (session('status'))
-                <div class="alert alert-success border-0 small rounded-3 mb-4">
+                <div class="alert alert-success border-0 small rounded-3 mb-3">
                     {{ session('status') }}
                 </div>
             @endif
-            
+
+            @if (session('error'))
+                <div class="alert alert-danger border-0 small rounded-3 mb-3">
+                    {{ session('error') }}
+                </div>
+            @endif
+
             <form method="POST" action="{{ route('login') }}">
                 @csrf
-                
-                <div class="mb-3">
+
+                <div class="mb-2">
                     <label class="form-label">Email Address</label>
                     <input type="email" name="email" class="form-control" placeholder="your@email.com" value="{{ old('email') }}" required autofocus>
                     @error('email')
                         <div class="text-danger small mt-1 fw-bold">{{ $message }}</div>
                     @enderror
                 </div>
-                
-                <div class="mb-4">
+
+                <div class="mb-2">
                     <div class="d-flex justify-content-between">
                         <label class="form-label">Password</label>
                         @if (Route::has('password.request'))
@@ -180,8 +188,8 @@
                         <div class="text-danger small mt-1 fw-bold">{{ $message }}</div>
                     @enderror
                 </div>
-                
-                <div class="mb-4">
+
+                <div class="mb-3">
                     <div class="form-check small">
                         <input class="form-check-input" type="checkbox" id="remember_me" name="remember">
                         <label class="form-check-label text-muted fw-medium" for="remember_me">
@@ -189,13 +197,13 @@
                         </label>
                     </div>
                 </div>
-                
+
                 <button type="submit" class="btn-login">
                     Sign In to Dashboard
                 </button>
-                
+
                 <div class="footer-links">
-                    <p class="text-muted small">© {{ date('Y') }} Pixies Bar Management. v2.0</p>
+                    <p class="text-muted small mb-0">© {{ date('Y') }} Pixies Bar Management. v2.0</p>
                 </div>
             </form>
         </div>

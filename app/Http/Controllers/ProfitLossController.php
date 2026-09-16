@@ -6,12 +6,13 @@ use App\Models\Bar;
 use App\Models\CustomerTab;
 use App\Models\DailyReport;
 use App\Models\DailyReportPayment;
+use App\Models\DamagedGood;
 use App\Models\Sale;
 use App\Models\Expense;
 use App\Models\Payment;
 use App\Models\ProductUnit;
-use App\Models\ProductUnitPrice;
 use App\Models\StockEntryItem;
+use App\Services\InventoryService;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
@@ -23,20 +24,25 @@ class ProfitLossController extends Controller
     /**
      * Resolve cost per base unit for COGS.
      * sold_quantity is always stored in base units; costs must match warehouse formula:
-     * total_purchase_cost / (quantity_purchased * conversion_factor).
+     * total_purchase_cost / (quantity_purchased * conversion_factor). Uses the
+     * same bar-override-first lookup as stock entry (InventoryService::getUnitPrice),
+     * so a bar-specific cost the director sets on Stock is honored here too,
+     * instead of always falling back to the global default cost.
      */
     private function resolveBaseUnitCost(StockEntryItem $item): float
     {
-        $item->loadMissing('item');
+        $item->loadMissing(['item', 'stockEntry']);
 
         $baseUnit = ProductUnit::where('item_id', $item->item_id)
             ->where('is_base_unit', true)
             ->first();
 
         if ($baseUnit) {
-            $unitPrice = ProductUnitPrice::where('item_id', $item->item_id)
-                ->where('unit_name', $baseUnit->unit_name)
-                ->first();
+            $unitPrice = app(InventoryService::class)->getUnitPrice(
+                $item->item_id,
+                $baseUnit->unit_name,
+                $item->stockEntry?->bar_id
+            );
             if ($unitPrice && $unitPrice->purchase_price > 0) {
                 return (float) $unitPrice->purchase_price;
             }
@@ -78,14 +84,14 @@ class ProfitLossController extends Controller
             } elseif ($selectedBar) {
                 $q->where('bar_id', $selectedBar->id);
             }
-        })->with('item');
+        })->with(['item', 'stockEntry']);
     }
 
     private function stockItemsRangeQuery(Carbon $startDate, Carbon $endDate, Bar $bar): Builder
     {
         return StockEntryItem::whereHas('stockEntry', function ($q) use ($startDate, $endDate, $bar) {
             $q->whereBetween('date', [$startDate, $endDate])->where('bar_id', $bar->id);
-        })->with('item');
+        })->with(['item', 'stockEntry']);
     }
 
     private function marginPercent(float $profit, float $sales): float
@@ -157,6 +163,7 @@ class ProfitLossController extends Controller
                     ->sum('amount');
 
                 $overheadExpenses = 0;
+                $damagedGoods = (float) DamagedGood::where('bar_id', $bar?->id)->whereDate('date', $currentDate)->sum('amount');
                 $locationName = $bar->name;
             } else {
                 $salesAmount = $this->stockItemsQuery($currentDate, null, $selectedBar)->sum('sales_amount');
@@ -164,6 +171,9 @@ class ProfitLossController extends Controller
 
                 $expenses = (float) Expense::barOperatingBetween($currentDate, $currentDate, $selectedBar?->id)->sum('amount');
                 $overheadExpenses = (float) Expense::overheadBetween($currentDate, $currentDate, $selectedBar?->id)->sum('amount');
+                $damagedGoods = (float) DamagedGood::whereDate('date', $currentDate)
+                    ->when($selectedBar, fn ($q) => $q->where('bar_id', $selectedBar->id))
+                    ->sum('amount');
 
                 $locationName = $selectedBar ? $selectedBar->name : 'All Locations';
             }
@@ -180,6 +190,7 @@ class ProfitLossController extends Controller
                 'gross_margin' => $this->marginPercent($grossProfit, $salesAmount),
                 'expenses' => $expenses,
                 'overhead_expenses' => $overheadExpenses,
+                'damaged_goods' => $damagedGoods,
                 'net_profit' => $netProfit,
                 'profit_margin' => $this->marginPercent($netProfit, $salesAmount),
             ];
@@ -194,6 +205,7 @@ class ProfitLossController extends Controller
             'gross_profit' => array_sum(array_column($reportData, 'gross_profit')),
             'expenses' => array_sum(array_column($reportData, 'expenses')),
             'overhead_expenses' => array_sum(array_column($reportData, 'overhead_expenses')),
+            'damaged_goods' => array_sum(array_column($reportData, 'damaged_goods')),
             'net_profit' => array_sum(array_column($reportData, 'net_profit')),
         ];
 
@@ -257,7 +269,10 @@ class ProfitLossController extends Controller
 
                 $barExpenses = (float) Expense::barOperatingBetween($startDate, $endDate, $bar->id)->sum('amount');
                 $barOverhead = (float) Expense::overheadBetween($startDate, $endDate, $bar->id)->sum('amount');
-                
+                $barDamagedGoods = (float) DamagedGood::where('bar_id', $bar->id)
+                    ->whereBetween('date', [$startDate, $endDate])
+                    ->sum('amount');
+
                 if ($barSales > 0) {
                     $barGrossProfit = $barSales - $barPurchaseCost;
                     $barNetProfit = $barGrossProfit - $barExpenses;
@@ -268,6 +283,7 @@ class ProfitLossController extends Controller
                         'gross_profit' => $barGrossProfit,
                         'expenses' => $barExpenses,
                         'overhead_expenses' => $barOverhead,
+                        'damaged_goods' => $barDamagedGoods,
                         'profit' => $barNetProfit,
                         'gross_margin' => $this->marginPercent($barGrossProfit, $barSales),
                         'margin' => $this->marginPercent($barNetProfit, $barSales),

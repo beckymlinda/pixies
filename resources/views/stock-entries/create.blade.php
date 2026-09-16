@@ -234,7 +234,8 @@
                     <table class="table compact-table mb-0">
                         <thead>
                             <tr>
-                                <th style="width: 35%">Product / Item</th>
+                                <th class="text-center" style="width: 4%">#</th>
+                                <th style="width: 31%">Product / Item</th>
                                 <th class="text-center" style="width: 12%">Price</th>
                                 <th class="text-center" style="width: 10%">Opening</th>
                                 <th class="text-center" style="width: 10%">Orders</th>
@@ -252,6 +253,7 @@
                                     $baseUnitPrice = $baseUnit->price?->selling_price ?? $item['price'];
                                 @endphp
                                 <tr data-item-id="{{ $item['id'] }}">
+                                    <td data-label="#" class="text-center text-muted fw-semibold">{{ $loop->iteration }}</td>
                                     <td data-label="Product">
                                         <div class="fw-bold text-dark">{{ $item['name'] }}</div>
                                         <div class="small text-muted">{{ $item['category'] }}</div>

@@ -44,7 +44,8 @@ class CreditCustomersController extends Controller
 
         // Global view across bars for managers/directors without a bar assignment.
         if ($user->isAdmin() && !$bar) {
-            $query = CustomerTab::selectRaw('
+            $query = CustomerTab::notDamageWriteOffs()
+            ->selectRaw('
                 customer_name,
                 phone,
                 bar_id,
@@ -116,7 +117,7 @@ class CreditCustomersController extends Controller
         }
 
         // Get existing customers for autocomplete
-        $query = CustomerTab::query();
+        $query = CustomerTab::notDamageWriteOffs();
         if ($bar) {
             $query->forBar($bar->id);
         }
@@ -204,7 +205,7 @@ class CreditCustomersController extends Controller
         }
 
         // Get customer's full history (across all bars for director if no specific bar)
-        $query = CustomerTab::where('customer_name', $customerName);
+        $query = CustomerTab::notDamageWriteOffs()->where('customer_name', $customerName);
         if ($bar) {
             $query->where('bar_id', $bar->id);
         }
@@ -466,7 +467,8 @@ class CreditCustomersController extends Controller
         $exportBarId = $bar?->id ?? $request->get('bar_id');
 
         if ($user->isAdmin() && !$exportBarId) {
-            $customers = CustomerTab::selectRaw('
+            $customers = CustomerTab::notDamageWriteOffs()
+                ->selectRaw('
                 customer_name,
                 phone,
                 bar_id,

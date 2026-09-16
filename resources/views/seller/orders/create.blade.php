@@ -89,8 +89,19 @@
             </div>
         </div>
         <div>
-            <a href="{{ route('seller.orders.index') }}" class="btn btn-outline-secondary btn-sm">
-                <i class="bi bi-clock-history me-1"></i> Request History
+            @php
+                $sellerUnseenCount = auth()->user()->bar_id
+                    ? \App\Models\OrderRequest::where('bar_id', auth()->user()->bar_id)
+                        ->where('status', '!=', 'pending')
+                        ->where('seller_notified', false)
+                        ->count()
+                    : 0;
+            @endphp
+            <a href="{{ route('seller.orders.index') }}" class="btn btn-outline-secondary btn-sm position-relative">
+                <i class="bi bi-clock-history me-1"></i> Order History
+                @if($sellerUnseenCount > 0)
+                    <span class="badge bg-primary rounded-pill ms-1" style="font-size: 0.65rem;">{{ $sellerUnseenCount }}</span>
+                @endif
             </a>
         </div>
     </div>

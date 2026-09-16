@@ -306,6 +306,15 @@
                                 MWK {{ number_format($totals['gross_profit']) }}
                             </span>
                         </div>
+                        @if(($totals['damaged_goods'] ?? 0) > 0)
+                        <div class="pl-line">
+                            <span class="pl-label indent">
+                                Includes: Damaged Goods
+                                <span class="formula-hint">Written-off stock cost — already counted in COGS above, shown here for visibility</span>
+                            </span>
+                            <span class="pl-value muted">MWK {{ number_format($totals['damaged_goods']) }}</span>
+                        </div>
+                        @endif
                         <div class="pl-line">
                             <span class="pl-label indent">
                                 Less: Bar Shift Expenses
@@ -417,6 +426,7 @@
                             <th class="text-end">Revenue</th>
                             <th class="text-end">COGS</th>
                             <th class="text-end">Gross Profit</th>
+                            <th class="text-end">Damaged</th>
                             <th class="text-end">Expenses</th>
                             <th class="text-end">Net Profit</th>
                             <th class="text-end">Net Margin</th>
@@ -424,12 +434,13 @@
                     </thead>
                     <tbody>
                         @foreach($reportData as $day)
-                            @if($day['sales'] > 0 || $day['expenses'] > 0)
+                            @if($day['sales'] > 0 || $day['expenses'] > 0 || ($day['damaged_goods'] ?? 0) > 0)
                             <tr>
                                 <td class="fw-medium">{{ $day['date'] }}</td>
                                 <td class="text-end">MWK {{ number_format($day['sales']) }}</td>
                                 <td class="text-end text-muted">MWK {{ number_format($day['purchase_cost']) }}</td>
                                 <td class="text-end {{ $day['gross_profit'] >= 0 ? 'text-success' : 'text-danger' }}">MWK {{ number_format($day['gross_profit']) }}</td>
+                                <td class="text-end text-muted">MWK {{ number_format($day['damaged_goods'] ?? 0) }}</td>
                                 <td class="text-end text-warning">MWK {{ number_format($day['expenses']) }}</td>
                                 <td class="text-end fw-semibold {{ $day['net_profit'] >= 0 ? 'text-success' : 'text-danger' }}">MWK {{ number_format($day['net_profit']) }}</td>
                                 <td class="text-end">{{ $day['profit_margin'] }}%</td>
@@ -441,6 +452,7 @@
                             <td class="text-end">MWK {{ number_format($totals['sales']) }}</td>
                             <td class="text-end">MWK {{ number_format($totals['purchase_cost']) }}</td>
                             <td class="text-end">MWK {{ number_format($totals['gross_profit']) }}</td>
+                            <td class="text-end">MWK {{ number_format($totals['damaged_goods'] ?? 0) }}</td>
                             <td class="text-end">MWK {{ number_format($totals['expenses']) }}</td>
                             <td class="text-end">MWK {{ number_format($totals['net_profit']) }}</td>
                             <td class="text-end">{{ $totals['profit_margin'] }}%</td>
@@ -499,6 +511,7 @@
                             <th class="text-end">Revenue</th>
                             <th class="text-end">COGS</th>
                             <th class="text-end">Gross Profit</th>
+                            <th class="text-end">Damaged</th>
                             <th class="text-end">Expenses</th>
                             <th class="text-end">Net Profit</th>
                             <th class="text-end">Gross Margin</th>
@@ -512,6 +525,7 @@
                             <td class="text-end">MWK {{ number_format($bar['sales']) }}</td>
                             <td class="text-end text-muted">MWK {{ number_format($bar['purchase_cost']) }}</td>
                             <td class="text-end">MWK {{ number_format($bar['gross_profit']) }}</td>
+                            <td class="text-end text-muted">MWK {{ number_format($bar['damaged_goods'] ?? 0) }}</td>
                             <td class="text-end text-warning">MWK {{ number_format($bar['expenses']) }}</td>
                             <td class="text-end fw-semibold {{ $bar['profit'] >= 0 ? 'text-success' : 'text-danger' }}">MWK {{ number_format($bar['profit']) }}</td>
                             <td class="text-end">{{ $bar['gross_margin'] }}%</td>

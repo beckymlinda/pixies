@@ -116,13 +116,13 @@
                         </div>
                     </div>
 
-                    @if($stockEntry->payments->count() > 0)
+                    @if(!empty($electronicBreakdown))
                         <div class="mt-4 pt-3 border-top">
-                            <p class="small text-muted fw-bold text-uppercase mb-2" style="font-size: 0.65rem;">Non-Cash Breakdown</p>
+                            <p class="small text-muted fw-bold text-uppercase mb-2" style="font-size: 0.65rem;">Electronic Breakdown</p>
                             <div class="d-flex flex-wrap gap-2">
-                                @foreach($stockEntry->payments as $payment)
+                                @foreach($electronicBreakdown as $method => $amount)
                                     <span class="badge bg-light text-dark border px-3 py-2 rounded-pill small fw-medium">
-                                        {{ $payment->type }}: {{ number_format($payment->amount) }}
+                                        {{ $method }}: {{ number_format($amount) }}
                                     </span>
                                 @endforeach
                             </div>

@@ -100,7 +100,7 @@
                     <div class="stat-icon bg-danger bg-opacity-10 text-danger">
                         <i class="bi bi-cash-stack"></i>
                     </div>
-                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Total Spent / Credit</div>
+                    <div class="small text-muted text-uppercase fw-bold mb-1" style="font-size: 0.65rem;">Total Spent</div>
                     <div class="h3 mb-0 fw-bold text-dark">
                         <span class="small fs-6 opacity-50">MWK</span> {{ number_format($totalAmount) }}
                     </div>
@@ -151,11 +151,11 @@
                                     MWK {{ number_format($expense->amount) }}
                                 </td>
                                 <td data-label="Actions" class="text-end">
-                                    <div class="d-flex justify-content-end gap-1">
+                                    <div class="d-flex justify-content-end align-items-center gap-1">
                                         <a href="{{ route('expenses.show', $expense) }}" class="btn-action shadow-sm" title="View">
                                             <i class="bi bi-eye-fill"></i>
                                         </a>
-                                        @if(auth()->user()->isManager() || auth()->user()->isDirector())
+                                        @if(auth()->user()->isAdmin() && $expense->is_overhead)
                                             <a href="{{ route('expenses.edit', $expense) }}" class="btn-action shadow-sm" title="Edit">
                                                 <i class="bi bi-pencil-fill"></i>
                                             </a>
@@ -166,39 +166,14 @@
                                                     <i class="bi bi-trash-fill"></i>
                                                 </button>
                                             </form>
+                                        @elseif(auth()->user()->isAdmin())
+                                            <span class="small text-muted">Via shift report</span>
                                         @endif
                                     </div>
                                 </td>
                             </tr>
                         @endforeach
-                        @foreach($debtEntries as $debt)
-                            <tr>
-                                @if(!auth()->user()->isSeller())
-                                    <td data-label="Seller">
-                                        <div class="fw-semibold text-dark">Shift Report</div>
-                                        <div class="small text-muted">Credit sale</div>
-                                    </td>
-                                @endif
-                                <td data-label="Category">
-                                    <span class="badge bg-purple bg-opacity-10 text-purple border px-3 py-2 rounded-pill">
-                                        Debt (Credit Sale)
-                                    </span>
-                                </td>
-                                <td data-label="Details">
-                                    <div class="text-secondary small">{{ $debt->customer_name ?: 'No customer name' }}</div>
-                                </td>
-                                <td data-label="Time">
-                                    <div class="text-muted small">{{ $debt->created_at->format('h:i A') }}</div>
-                                </td>
-                                <td data-label="Amount" class="text-end fw-bold text-dark">
-                                    MWK {{ number_format($debt->amount) }}
-                                </td>
-                                <td data-label="Actions" class="text-end">
-                                    <span class="small text-muted">Via shift report</span>
-                                </td>
-                            </tr>
-                        @endforeach
-                        @if($expenses->isEmpty() && $debtEntries->isEmpty())
+                        @if($expenses->isEmpty())
                             <tr>
                                 <td colspan="6" class="text-center py-5">
                                     <div class="opacity-25 display-4 mb-3">🧾</div>

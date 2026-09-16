@@ -50,8 +50,9 @@ class CastelController extends Controller
             })
             ->sum('counted');
 
-        // Itemized breakdown for Castel marked items
-        $castelItems = Item::where('is_castel', true)->orderBy('name')->get();
+        // Itemized breakdown for Castel marked items - creation order,
+        // consistent with every other item listing in the app.
+        $castelItems = Item::where('is_castel', true)->orderBy('id')->get();
 
         $itemCounts = BottleCount::whereDate('date', $today)
             ->when($selectedBarId, function($q) use ($selectedBarId) {

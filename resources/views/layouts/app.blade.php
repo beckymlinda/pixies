@@ -6,6 +6,7 @@
         <meta name="csrf-token" content="{{ csrf_token() }}">
         
         <title>{{ config('app.name', 'Pixies Bar Management') }}</title>
+        <link rel="icon" type="image/png" href="{{ asset('images/fav.png') }}">
 
         <!-- Google Fonts -->
         <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -131,6 +132,11 @@
                 border-left-color: #3b82f6;
             }
 
+            .sidebar-sublink i {
+                font-size: 1rem;
+                margin-right: 0.6rem;
+            }
+
             /* Main Area */
             #main-wrapper {
                 margin-left: var(--sidebar-width);
@@ -215,25 +221,8 @@
                     <a href="{{ route('stock-entries.sell') }}" class="sidebar-nav-link {{ request()->routeIs('stock-entries.index', 'stock-entries.create', 'stock-entries.edit', 'stock-entries.sell') ? 'active' : '' }}">
                         <i class="bi bi-cart-check"></i> Sell
                     </a>
-                    <a href="{{ route('stock-expiry.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-expiry.*') ? 'active' : '' }}">
-                        <i class="bi bi-exclamation-triangle"></i> Stock Expiry
-                    </a>
                     <a href="{{ route('seller.orders.create') }}" class="sidebar-nav-link {{ request()->routeIs('seller.orders.create') ? 'active' : '' }}">
                         <i class="bi bi-cart-plus"></i> Order
-                    </a>
-                    <a href="{{ route('seller.orders.index') }}" class="sidebar-nav-link {{ request()->routeIs('seller.orders.index') ? 'active' : '' }} d-flex justify-content-between align-items-center">
-                        <span><i class="bi bi-receipt"></i> Order History</span>
-                            @php
-                                $sellerUnseenCount = auth()->user()->bar_id
-                                    ? \App\Models\OrderRequest::where('bar_id', auth()->user()->bar_id)
-                                        ->where('status', '!=', 'pending')
-                                        ->where('seller_notified', false)
-                                        ->count()
-                                    : 0;
-                            @endphp
-                        @if($sellerUnseenCount > 0)
-                            <span class="badge bg-primary rounded-pill" style="font-size: 0.65rem;">{{ $sellerUnseenCount }}</span>
-                        @endif
                     </a>
                     @php
                         $todayCastelCount = auth()->user()->bar_id
@@ -259,7 +248,7 @@
                     </a>
                 @elseif(auth()->user()->isManager() || auth()->user()->isDirector())
                     <a href="{{ auth()->user()->isDirector() ? route('director.dashboard') : route('manager.dashboard') }}" class="sidebar-nav-link {{ request()->routeIs(auth()->user()->isDirector() ? 'director.dashboard' : 'manager.dashboard') ? 'active' : '' }}">
-                        <i class="bi bi-grid-1x2"></i> {{ auth()->user()->isDirector() ? 'Executive Overview' : 'Dashboard' }}
+                        <i class="bi bi-grid-1x2"></i> Dashboard
                     </a>
                     @php
                         $stockBars = \App\Models\Bar::listed()->orderBy('name')->get();
@@ -299,33 +288,43 @@
                             @endif
                         </a>
                     @endif
-                    <a href="{{ route('warehouse.index') }}" class="sidebar-nav-link {{ request()->routeIs('warehouse.*') ? 'active' : '' }}">
-                        <i class="bi bi-warehouse"></i> Stock Warehouse
-                    </a>
-                    <a href="{{ route('stock-expiry.index') }}" class="sidebar-nav-link {{ request()->routeIs('stock-expiry.*') ? 'active' : '' }}">
-                        <i class="bi bi-exclamation-triangle"></i> Stock Expiry
-                    </a>
-                    <a href="{{ route('profit-loss.index') }}" class="sidebar-nav-link {{ request()->routeIs('profit-loss.*') ? 'active' : '' }}">
-                        <i class="bi bi-graph-up"></i> Profit & Loss
-                    </a>
                     <a href="{{ route('reconciliation.index') }}" class="sidebar-nav-link {{ request()->routeIs('reconciliation.*') ? 'active' : '' }}">
                         <i class="bi bi-shield-check"></i> Cash Audit
                     </a>
-                    <a href="{{ route('expenses.index') }}" class="sidebar-nav-link {{ request()->routeIs('expenses.*') ? 'active' : '' }}">
-                        <i class="bi bi-receipt"></i> Expenses
+                    @php
+                        $moreRoutePatterns = ['stock-expiry.*', 'profit-loss.*', 'warehouse.*', 'expenses.*', 'damaged-goods.*', 'credit-customers.*', 'reports.*', 'activity-logs.*'];
+                        $moreActive = request()->routeIs(...$moreRoutePatterns);
+                    @endphp
+                    <a href="#moreSubmenu" class="sidebar-nav-link d-flex justify-content-between align-items-center {{ $moreActive ? 'active' : '' }}" data-bs-toggle="collapse" role="button" aria-expanded="{{ $moreActive ? 'true' : 'false' }}" aria-controls="moreSubmenu">
+                        <span><i class="bi bi-grid-3x3-gap"></i> Reports &amp; More</span>
+                        <i class="bi bi-chevron-down"></i>
                     </a>
-                    <a href="{{ route('damaged-goods.index') }}" class="sidebar-nav-link {{ request()->routeIs('damaged-goods.*') ? 'active' : '' }}">
-                        <i class="bi bi-bandaid"></i> Damaged Goods
-                    </a>
-                    <a href="{{ route('credit-customers.index') }}" class="sidebar-nav-link {{ request()->routeIs('credit-customers.*') ? 'active' : '' }}">
-                        <i class="bi bi-person-lines-fill"></i> Credit Tabs
-                    </a>
-                    <a href="{{ route('reports.dashboard') }}" class="sidebar-nav-link {{ request()->routeIs('reports.*') ? 'active' : '' }}">
-                        <i class="bi bi-bar-chart-line"></i> Performance
-                    </a>
-                    <a href="{{ route('activity-logs.index') }}" class="sidebar-nav-link {{ request()->routeIs('activity-logs.*') ? 'active' : '' }}">
-                        <i class="bi bi-clock-history"></i> Activity Log
-                    </a>
+                    <div class="collapse {{ $moreActive ? 'show' : '' }}" id="moreSubmenu">
+                        <a href="{{ route('stock-expiry.index') }}" class="sidebar-sublink {{ request()->routeIs('stock-expiry.*') ? 'active' : '' }}">
+                            <i class="bi bi-exclamation-triangle"></i> Stock Expiry
+                        </a>
+                        <a href="{{ route('profit-loss.index') }}" class="sidebar-sublink {{ request()->routeIs('profit-loss.*') ? 'active' : '' }}">
+                            <i class="bi bi-graph-up"></i> Profit &amp; Loss
+                        </a>
+                        <a href="{{ route('warehouse.index') }}" class="sidebar-sublink {{ request()->routeIs('warehouse.*') ? 'active' : '' }}">
+                            <i class="bi bi-warehouse"></i> Stock Warehouse
+                        </a>
+                        <a href="{{ route('expenses.index') }}" class="sidebar-sublink {{ request()->routeIs('expenses.*') ? 'active' : '' }}">
+                            <i class="bi bi-receipt"></i> Expenses
+                        </a>
+                        <a href="{{ route('damaged-goods.index') }}" class="sidebar-sublink {{ request()->routeIs('damaged-goods.*') ? 'active' : '' }}">
+                            <i class="bi bi-bandaid"></i> Damaged Goods
+                        </a>
+                        <a href="{{ route('credit-customers.index') }}" class="sidebar-sublink {{ request()->routeIs('credit-customers.*') ? 'active' : '' }}">
+                            <i class="bi bi-person-lines-fill"></i> Credit Tabs
+                        </a>
+                        <a href="{{ route('reports.dashboard') }}" class="sidebar-sublink {{ request()->routeIs('reports.*') ? 'active' : '' }}">
+                            <i class="bi bi-bar-chart-line"></i> Performance
+                        </a>
+                        <a href="{{ route('activity-logs.index') }}" class="sidebar-sublink {{ request()->routeIs('activity-logs.*') ? 'active' : '' }}">
+                            <i class="bi bi-clock-history"></i> Activity Log
+                        </a>
+                    </div>
                 @endif
             </div>
 

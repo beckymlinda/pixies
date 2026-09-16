@@ -289,6 +289,10 @@
                                     <div class="h5 mb-0 fw-bold text-info"><span class="small opacity-50">MWK</span> <span id="newDebt">0</span></div>
                                 </div>
                                 <div class="col-6 col-md-4">
+                                    <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Damages</div>
+                                    <div class="h5 mb-0 fw-bold text-info"><span class="small opacity-50">MWK</span> <span id="damagesSpend">0</span></div>
+                                </div>
+                                <div class="col-6 col-md-4">
                                     <div class="text-white-50 small text-uppercase fw-bold mb-1" style="font-size: 0.6rem;">Bankable Balance</div>
                                     <div class="h5 mb-0 fw-bold text-success"><span class="small opacity-50">MWK</span> <span id="bankableBalance">0</span></div>
                                 </div>
@@ -516,10 +520,15 @@ function updateCalculations() {
 
     let operationalSpend = 0;
     let newDebt = 0;
+    let damagesSpend = 0;
     document.querySelectorAll('.expenditure-row').forEach(row => {
         const type = row.querySelector('.expenditure-type')?.value;
         const amount = parseFloat(row.querySelector('.expenditure-amount')?.value) || 0;
+        // Ngongole (debt) and Damages are recorded as tabs, not cash paid
+        // out - neither should reduce Operational Spend or the bankable
+        // balance, same as the help text above this form already says.
         if (type === 'debt') newDebt += amount;
+        else if (type === 'damages') damagesSpend += amount;
         else operationalSpend += amount;
     });
 
@@ -535,6 +544,7 @@ function updateCalculations() {
     document.getElementById('missingAmount').innerText = Math.abs(variance).toLocaleString();
     document.getElementById('operationalSpend').innerText = operationalSpend.toLocaleString();
     document.getElementById('newDebt').innerText = newDebt.toLocaleString();
+    document.getElementById('damagesSpend').innerText = damagesSpend.toLocaleString();
     document.getElementById('bankableBalance').innerText = bankable.toLocaleString();
 
     const container = document.getElementById('varianceContainer');

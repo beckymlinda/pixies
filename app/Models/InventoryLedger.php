@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class InventoryLedger extends Model
 {
+    protected $table = 'inventory_ledger';
+
     protected $fillable = [
         'item_id',
         'bar_id',

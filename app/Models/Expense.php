@@ -35,8 +35,14 @@ class Expense extends Model
 
     public static function operationalTypes(): array
     {
+        // Debt (Ngongole) and Damages are never plain cash expenses - Debt is
+        // a credit sale tracked via CustomerTab, and Damages is a stock
+        // write-off tracked via DamagedGood, each with its own dedicated
+        // page. Excluding both here keeps the standalone Expenses
+        // create/edit forms (and their validation) limited to genuine cash
+        // outlays only.
         return collect(self::expenditureTypes())
-            ->except('debt')
+            ->except(['debt', 'damages'])
             ->all();
     }
 

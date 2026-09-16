@@ -1365,16 +1365,14 @@ class ReportsController extends Controller
         });
 
         if ($barId) {
+            // Only Ngongole (debt) tabs get re-synced here - damages have
+            // their own dedicated page (DamagedGood, handled above) and are
+            // never mirrored into Credit Tabs, so there's nothing of that
+            // kind to clear before re-creating below.
             CustomerTab::where('bar_id', $barId)
                 ->whereDate('date', $date)
                 ->where('created_by', $user->id)
                 ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
-                ->delete();
-
-            CustomerTab::where('bar_id', $barId)
-                ->whereDate('date', $date)
-                ->where('created_by', $user->id)
-                ->where('description', 'like', Expense::SHIFT_DAMAGE_PREFIX . '%')
                 ->delete();
         }
 
@@ -1403,14 +1401,12 @@ class ReportsController extends Controller
                     'created_by' => $user->id,
                 ]);
             } elseif ($type === 'damages' && $barId) {
-                // Damages are NOT an expense (no cash was paid out) - they're
-                // recorded the same way Ngongole is: as a tab/credit-style
-                // entry, since the stock left the shelf without any money
-                // coming in for it. DamagedGood keeps the item/photo evidence;
-                // the CustomerTab is what makes it show up on Credit Tabs and
-                // keeps it out of the cash "Expenses" figures.
-                $itemName = $damageItemId ? Item::find($damageItemId)?->name : null;
-
+                // Damages are NOT an expense (no cash was paid out) and NOT a
+                // credit tab (nobody owes this money) - they're their own
+                // thing, tracked only via DamagedGood, with its own
+                // dedicated page (item, photo, quantity evidence). Kept out
+                // of Expenses and Credit Tabs entirely, same as this page's
+                // own "Total Expenses"/"Credit Sales" figures never count it.
                 DamagedGood::create([
                     'date' => $date,
                     'description' => $notes ?: 'Damaged goods',
@@ -1425,27 +1421,10 @@ class ReportsController extends Controller
                     'user_id' => $user->id,
                 ]);
 
-                // Marked as already "paid" (balance 0): nobody owes this money -
-                // it's a loss, not a receivable - so it must NOT add to Credit
-                // Sales / Total Outstanding alongside real customer debt. It
-                // still shows up on the Credit Tabs list as a $0-balance entry,
-                // which is all "put it in the tabs" needs it to do.
-                CustomerTab::create([
-                    'customer_name' => $itemName ? "Damaged: {$itemName}" : 'Damaged Goods',
-                    'phone' => null,
-                    'bar_id' => $barId,
-                    'date' => $date,
-                    'amount' => $amount,
-                    'paid_amount' => $amount,
-                    'status' => 'paid',
-                    'description' => Expense::SHIFT_DAMAGE_PREFIX . ' ' . ($notes ?: 'Damaged goods'),
-                    'created_by' => $user->id,
-                ]);
-
                 // Damages are treated like a sale for stock purposes: the
                 // broken unit(s) come off the shelf immediately, the same
                 // way a sold unit would, but without counting as revenue
-                // (the loss is tracked separately via the tab above).
+                // (the loss is tracked separately via Damaged Goods above).
                 if ($damageItemId && $damageQuantity > 0) {
                     $this->adjustStockForDamage($barId, $damageItemId, $damageQuantity, $date, $user->id);
                 }

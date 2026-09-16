@@ -98,6 +98,7 @@
                 <table class="table index-table mb-0">
                     <thead>
                         <tr>
+                            <th>#</th>
                             <th>Entry Date</th>
                             <th>Location / Bar</th>
                             @if(!auth()->user()->isSeller())
@@ -110,6 +111,7 @@
                     <tbody>
                         @forelse($entries as $entry)
                             <tr>
+                                <td data-label="#">{{ $loop->iteration }}</td>
                                 <td data-label="Date">
                                     <div class="d-flex align-items-center">
                                         <div class="bg-light rounded-3 p-2 me-3 d-none d-md-block">
@@ -138,16 +140,20 @@
                                     <a href="{{ route('stock-entries.show', $entry) }}" class="btn-action" title="View Details">
                                         <i class="bi bi-eye-fill"></i>
                                     </a>
-                                    @if(auth()->user()->isAdmin() || (auth()->user()->isSeller() && $entry->date->isToday()))
-                                        <a href="{{ route('stock-entries.edit', $entry) }}" class="btn-action ms-1" title="{{ auth()->user()->isSeller() ? 'Sell' : 'Edit Entry' }}">
-                                            <i class="bi {{ auth()->user()->isSeller() ? 'bi-play-fill' : 'bi-pencil-fill' }}"></i>
+                                    @if(auth()->user()->isSeller() && $entry->date->isToday())
+                                        <a href="{{ route('stock-entries.edit', $entry) }}" class="btn btn-sm btn-primary rounded-pill px-3 ms-1" title="Continue this stock sheet">
+                                            <i class="bi bi-play-fill me-1"></i>Continue
+                                        </a>
+                                    @elseif(auth()->user()->isAdmin())
+                                        <a href="{{ route('stock-entries.edit', $entry) }}" class="btn-action ms-1" title="Edit Entry">
+                                            <i class="bi bi-pencil-fill"></i>
                                         </a>
                                     @endif
                                 </td>
                             </tr>
                         @empty
                             <tr>
-                                <td colspan="5" class="text-center py-5">
+                                <td colspan="{{ auth()->user()->isSeller() ? 5 : 6 }}" class="text-center py-5">
                                     <div class="opacity-25 display-4 mb-3">📂</div>
                                     <p class="text-muted">{{ auth()->user()->isSeller() ? 'No selling sessions yet. Start selling to record today\'s sales.' : 'No sales records found. Record your first entry to get started.' }}</p>
                                 </td>

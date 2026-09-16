@@ -95,6 +95,20 @@ class CustomerTab extends Model
     }
 
     /**
+     * Exclude damage write-offs - Damaged Goods has its own dedicated page
+     * (with item/photo/quantity evidence); it's never created as a
+     * CustomerTab going forward, but this guards the Credit Customers
+     * listing against any that already exist or get created some other way.
+     */
+    public function scopeNotDamageWriteOffs($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('description')
+                ->orWhere('description', 'not like', Expense::SHIFT_DAMAGE_PREFIX . '%');
+        });
+    }
+
+    /**
      * Scope to get tabs by date range.
      */
     public function scopeByDateRange($query, $startDate, $endDate)
@@ -119,6 +133,7 @@ class CustomerTab extends Model
     public static function getCustomersWithBalances($barId): \Illuminate\Support\Collection
     {
         return self::forBar($barId)
+            ->notDamageWriteOffs()
             ->selectRaw('
                 customer_name,
                 phone,

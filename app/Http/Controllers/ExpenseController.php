@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CustomerTab;
 use App\Models\Expense;
 use App\Models\Bar;
 use Illuminate\Http\Request;
@@ -16,30 +15,24 @@ class ExpenseController extends Controller
     {
         $user = auth()->user();
 
+        // Debt (Ngongole) belongs on the Credit Customers page, not here -
+        // this listing is genuine cash expenses only. Managers/directors see
+        // every cash expense (their own overhead entries plus whatever
+        // sellers recorded on their shift reports), not just their own.
         $expenseRows = Expense::query()
             ->when($user->isSeller(), fn ($q) => $q->where('user_id', $user->id)->barOperating())
-            ->when($user->isAdmin(), fn ($q) => $q->overhead())
             ->selectRaw('date, SUM(amount) as expense_total, COUNT(*) as expense_count')
             ->whereNotNull('date')
             ->groupBy('date')
             ->get()
             ->keyBy(fn ($row) => is_string($row->date) ? $row->date : $row->date->format('Y-m-d'));
 
-        $debtRows = CustomerTab::query()
-            ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
-            ->when($user->isSeller(), fn ($q) => $q->where('created_by', $user->id))
-            ->when($user->bar_id, fn ($q) => $q->where('bar_id', $user->bar_id))
-            ->selectRaw('date, SUM(amount) as debt_total, COUNT(*) as debt_count')
-            ->groupBy('date')
-            ->get()
-            ->keyBy(fn ($row) => $row->date->format('Y-m-d'));
-
-        $dates = $expenseRows->keys()->merge($debtRows->keys())->unique()->sortDesc()->values();
+        $dates = $expenseRows->keys()->unique()->sortDesc()->values();
 
         $all = $dates->map(fn ($date) => (object) [
             'date' => $date,
-            'total_amount' => ($expenseRows[$date]->expense_total ?? 0) + ($debtRows[$date]->debt_total ?? 0),
-            'count' => ($expenseRows[$date]->expense_count ?? 0) + ($debtRows[$date]->debt_count ?? 0),
+            'total_amount' => $expenseRows[$date]->expense_total ?? 0,
+            'count' => $expenseRows[$date]->expense_count ?? 0,
         ]);
 
         $page = max(1, (int) request('page', 1));
@@ -59,6 +52,10 @@ class ExpenseController extends Controller
     {
         $user = auth()->user();
 
+        // Debt (Ngongole) belongs on the Credit Customers page, not here -
+        // this listing is genuine cash expenses only. Managers/directors see
+        // every cash expense for the day (their own overhead entries plus
+        // whatever sellers recorded on their shift reports), not just their own.
         if ($user->isSeller()) {
             $expenses = Expense::where('user_id', $user->id)
                 ->barOperating()
@@ -66,28 +63,16 @@ class ExpenseController extends Controller
                 ->with('user')
                 ->orderBy('created_at', 'desc')
                 ->get();
-
-            $debtEntries = CustomerTab::whereDate('date', $date)
-                ->where('created_by', $user->id)
-                ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
-                ->orderBy('created_at', 'desc')
-                ->get();
         } else {
-            $expenses = Expense::overhead()
-                ->where('date', $date)
+            $expenses = Expense::where('date', $date)
                 ->with(['user', 'bar'])
-                ->orderBy('created_at', 'desc')
-                ->get();
-
-            $debtEntries = CustomerTab::whereDate('date', $date)
-                ->where('description', 'like', Expense::SHIFT_DEBT_PREFIX . '%')
                 ->orderBy('created_at', 'desc')
                 ->get();
         }
 
-        $totalAmount = $expenses->sum('amount') + $debtEntries->sum('amount');
+        $totalAmount = $expenses->sum('amount');
 
-        return view('expenses.daily', compact('expenses', 'debtEntries', 'date', 'totalAmount'));
+        return view('expenses.daily', compact('expenses', 'date', 'totalAmount'));
     }
 
     public function create(): View|RedirectResponse
@@ -132,7 +117,7 @@ class ExpenseController extends Controller
 
     public function show(Expense $expense): View
     {
-        $this->authorizeExpenseAccess($expense);
+        $this->authorizeExpenseView($expense);
         $expense->load('user');
 
         return view('expenses.show', compact('expense'));
@@ -169,12 +154,27 @@ class ExpenseController extends Controller
         return redirect()->route('expenses.index')->with('success', 'Expense deleted successfully.');
     }
 
-    private function authorizeExpenseAccess(Expense $expense): void
+    /**
+     * Viewing is allowed for anything the user can see on the index/daily
+     * listings - sellers only their own, admins everything.
+     */
+    private function authorizeExpenseView(Expense $expense): void
     {
         $user = auth()->user();
         if ($user->isSeller() && $expense->user_id !== $user->id) {
             abort(403, 'Unauthorized access to expense.');
         }
+    }
+
+    /**
+     * Editing/deleting a shift-recorded expense here would just get
+     * silently overwritten the next time that shift report is resaved, so
+     * that's blocked - those are managed through daily shift reports.
+     */
+    private function authorizeExpenseAccess(Expense $expense): void
+    {
+        $this->authorizeExpenseView($expense);
+        $user = auth()->user();
         if ($user->isAdmin() && !$expense->is_overhead) {
             abort(403, 'Shift expenses are managed through daily shift reports.');
         }

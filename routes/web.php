@@ -112,33 +112,9 @@ Route::middleware(['auth', 'role:manager,director'])->prefix('stock')->name('sto
     Route::get('/delete', [StockEntryController::class, 'deleteStock'])->name('delete');
 });
 
-// Simple Routes for Item Management
-Route::middleware(['auth', 'role:director'])->prefix('items')->name('items.')->group(function () {
-    Route::post('/create', [StockEntryController::class, 'createItem'])->name('create');
-    Route::get('/{itemId}/edit', [StockEntryController::class, 'editItem'])->name('edit');
-    Route::put('/{itemId}', [StockEntryController::class, 'updateItem'])->name('update');
-    Route::delete('/{itemId}', [StockEntryController::class, 'deleteItem'])->name('delete');
-    Route::post('/{itemId}/restock', [StockEntryController::class, 'restockItem'])->name('restock');
-    Route::get('/{itemId}/ledger', [StockEntryController::class, 'getItemLedger'])->name('ledger');
-});
-
-// Stock History Routes
-Route::middleware(['auth', 'role:director'])->prefix('items')->name('items.')->group(function () {
-    Route::get('/{itemId}/stock-history', [StockEntryController::class, 'getStockHistory'])->name('stock-history');
-});
-
 // Warehouse Transfer Request Routes
 Route::middleware(['auth', 'role:director'])->prefix('warehouse-transfers')->name('warehouse-transfers.')->group(function () {
     Route::post('/request', [StockEntryController::class, 'createWarehouseRequest'])->name('create');
-});
-
-// API Routes for Item Management
-Route::middleware(['auth', 'role:director'])->prefix('api')->name('api.')->group(function () {
-    Route::get('/items/by-bar/{barId}', [StockEntryController::class, 'getItemsByBar'])->name('items.by-bar');
-    Route::get('/items/{itemId}', [StockEntryController::class, 'getItem'])->name('items.show');
-    Route::post('/items', [StockEntryController::class, 'createItem'])->name('items.create');
-    Route::put('/items/{itemId}', [StockEntryController::class, 'updateItem'])->name('items.update');
-    Route::delete('/items/{itemId}', [StockEntryController::class, 'deleteItem'])->name('items.delete');
 });
 
 // Expenses Routes
